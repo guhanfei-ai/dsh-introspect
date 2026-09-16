@@ -1,0 +1,86 @@
+{
+  "name": "dsh-introspect",
+  "version": "0.1.0",
+  "description": "Local-first self-observability for DeepSeek Harness: record real events, project them onto five observation axes (MEL/ROI/ARCTIC/TSA/RRI), store them in local SQLite, and watch MEL x RRI on a right-side panel.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guhanfei-ai/dsh-introspect.git"
+  },
+  "homepage": "https://github.com/guhanfei-ai/dsh-introspect#readme",
+  "bugs": {
+    "url": "https://github.com/guhanfei-ai/dsh-introspect/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "guhanfei-ai",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build:client": "node scripts/build-client.mjs",
+    "check": "npm run build:client && node --check index.js && node --check client.js && node --check scripts/build-client.mjs && node --check src/metrics.js && node --check src/time.js && node --check src/db/schema.js && node --check src/db/store.js && node --check src/db/view.js && node --check src/db/database.js && node --check src/tools.js && node --check src/api.js",
+    "test": "node --test",
+    "verify": "npm run check && npm test",
+    "prepack": "npm run verify"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "src/metrics.js",
+    "src/time.js",
+    "src/db/",
+    "src/tools.js",
+    "src/api.js",
+    "docs/",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.0"
+  },
+  "peerDependencies": {
+    "dsh-better-sidebar": ">=0.10.0"
+  },
+  "peerDependenciesMeta": {
+    "dsh-better-sidebar": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-cordis-client-runner",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ],
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "introspect",
+    "self-observability",
+    "telemetry",
+    "sqlite",
+    "local-first"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  }
+}
