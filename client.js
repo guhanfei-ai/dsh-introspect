@@ -1,7 +1,7 @@
 // dsh-introspect —— 浏览器半边（ModuleLoader 单文件模块，零外部依赖）。
 //
 // 职责：
-// - 「内观」按钮：挂 conversation.session.header.actions（list 槽），点击切换右侧
+// - 「MEL」按钮：挂 conversation.session.header.actions（list 槽），点击切换右侧
 //   悬浮面板的开/合；Better Sidebar 服务可用时改为原生 Tab，不渲染独立面板。
 // - 面板内容：五指标、MEL × RRI 时间曲线、Recent Events、实时刷新。
 // - 实时刷新：消费会话快照里 introspect_* 工具结果，指纹变化后拉取面板数据；
@@ -621,7 +621,7 @@ window.__ModuleLoader__.load({
 			}
 
 			/**
-			 * 「内观」槽位组件：同一槽位渲染按钮。betterSidebar 服务可用时走原生 Tab，
+			 * 「MEL」槽位组件：同一槽位渲染按钮。betterSidebar 服务可用时走原生 Tab，
 			 * 否则渲染独立 fixed 面板。
 			 */
 			function IntrospectSlot(props) {
@@ -677,7 +677,7 @@ window.__ModuleLoader__.load({
 					return (0, react_jsx_runtime.jsx)(react.Fragment, { children: (0, react_jsx_runtime.jsxs)("button", {
 						type: "button", title: "Introspect: open / close", style: S.mButton,
 						onClick: () => openIntrospectTab(sidebar, { sessionId }),
-						children: [buttonIcon, "内观"],
+						children: [buttonIcon, "MEL"],
 					}) });
 				}
 
@@ -685,7 +685,7 @@ window.__ModuleLoader__.load({
 					(0, react_jsx_runtime.jsxs)("button", {
 						type: "button", title: "Introspect: open / close", style: S.mButton,
 						onClick: () => setOpen((v) => !v),
-						children: [buttonIcon, "内观"],
+						children: [buttonIcon, "MEL"],
 					}),
 					(0, react_jsx_runtime.jsx)(IntrospectDetailsPanel, {
 						open, sessionId, introspectFace,
@@ -886,7 +886,7 @@ window.__ModuleLoader__.load({
 							if (!svc || typeof svc.registerTab !== "function") return;
 							const dispose = svc.registerTab({
 								id: "dsh-introspect:introspect",
-								title: () => "内观",
+								title: () => "MEL",
 								icon: (size) => (0, react_jsx_runtime.jsx)("svg", {
 									width: size, height: size, viewBox: "0 0 14 14", fill: "none", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round",
 									children: [

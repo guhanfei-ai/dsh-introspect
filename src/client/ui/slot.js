@@ -11,7 +11,7 @@
 			}
 
 			/**
-			 * 「内观」槽位组件：同一槽位渲染按钮。betterSidebar 服务可用时走原生 Tab，
+			 * 「MEL」槽位组件：同一槽位渲染按钮。betterSidebar 服务可用时走原生 Tab，
 			 * 否则渲染独立 fixed 面板。
 			 */
 			function IntrospectSlot(props) {
@@ -67,7 +67,7 @@
 					return (0, react_jsx_runtime.jsx)(react.Fragment, { children: (0, react_jsx_runtime.jsxs)("button", {
 						type: "button", title: "Introspect: open / close", style: S.mButton,
 						onClick: () => openIntrospectTab(sidebar, { sessionId }),
-						children: [buttonIcon, "内观"],
+						children: [buttonIcon, "MEL"],
 					}) });
 				}
 
@@ -75,7 +75,7 @@
 					(0, react_jsx_runtime.jsxs)("button", {
 						type: "button", title: "Introspect: open / close", style: S.mButton,
 						onClick: () => setOpen((v) => !v),
-						children: [buttonIcon, "内观"],
+						children: [buttonIcon, "MEL"],
 					}),
 					(0, react_jsx_runtime.jsx)(IntrospectDetailsPanel, {
 						open, sessionId, introspectFace,

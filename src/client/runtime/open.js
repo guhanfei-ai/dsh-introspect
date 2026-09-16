@@ -2,7 +2,7 @@
 // dsh-introspect —— 浏览器半边（ModuleLoader 单文件模块，零外部依赖）。
 //
 // 职责：
-// - 「内观」按钮：挂 conversation.session.header.actions（list 槽），点击切换右侧
+// - 「MEL」按钮：挂 conversation.session.header.actions（list 槽），点击切换右侧
 //   悬浮面板的开/合；Better Sidebar 服务可用时改为原生 Tab，不渲染独立面板。
 // - 面板内容：五指标、MEL × RRI 时间曲线、Recent Events、实时刷新。
 // - 实时刷新：消费会话快照里 introspect_* 工具结果，指纹变化后拉取面板数据；
