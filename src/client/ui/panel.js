@@ -16,27 +16,43 @@
 					const [hovered, setHovered] = react.useState(null);
 					const [chartHover, setChartHover] = react.useState(null);
 					const [refreshHover, setRefreshHover] = react.useState(false);
+					const [selectedHours, setSelectedHours] = react.useState(DEFAULT_CHART_HOURS);
+					const [rangeOpen, setRangeOpen] = react.useState(false);
 					const chartWrapRef = react.useRef(null);
 					const seenVersionRef = react.useRef(null);
-					const pendingRef = react.useRef(null);
+					const requestSeqRef = react.useRef(0);
+					const rangeRef = react.useRef(null);
 
-					const refresh = react.useCallback(async () => {
+					// 关闭 range 下拉（点击外部时）
+					react.useEffect(function () {
+						if (!rangeOpen) return;
+						function handleClick(e) {
+							if (rangeRef.current && !rangeRef.current.contains(e.target)) setRangeOpen(false);
+						}
+						document.addEventListener("mousedown", handleClick);
+						return function () { document.removeEventListener("mousedown", handleClick); };
+					}, [rangeOpen]);
+
+					// 刷新：race-safe，latest selection wins
+					const refresh = react.useCallback(async function (hoursOverride) {
 						if (!face || typeof face.fetchDashboard !== "function") return;
-						if (pendingRef.current) return;
+						const hours = typeof hoursOverride === "number" ? hoursOverride : selectedHours;
+						const seq = ++requestSeqRef.current;
 						setLoading(true);
-						pendingRef.current = true;
 						try {
-							const value = await face.fetchDashboard(sessionId);
+							const value = await face.fetchDashboard(sessionId, { hours: hours });
+							if (seq !== requestSeqRef.current) return; // stale response, discard
 							if (value && value.ok) { setDashboard(value); setError(null); }
 						} catch (e) {
+							if (seq !== requestSeqRef.current) return;
 							if (e) setError(e.message ?? "fetch failed");
 						} finally {
-							pendingRef.current = null;
-							setLoading(false);
+							if (seq === requestSeqRef.current) setLoading(false);
 						}
-					}, [face, sessionId]);
+					}, [face, sessionId, selectedHours]);
 
-					react.useEffect(() => {
+					// fingerprint 变化时：保留当前 selectedHours
+					react.useEffect(function () {
 						if (!nodesVersion) return;
 						if (seenVersionRef.current === null) {
 							seenVersionRef.current = nodesVersion;
@@ -50,11 +66,19 @@
 						}
 					}, [nodesVersion, visible, refresh, onAutoOpen]);
 
-					react.useEffect(() => {
+					react.useEffect(function () {
 						if (visible && !dashboard && !loading) refresh();
 					}, [visible, dashboard, loading, refresh]);
 
-					const openDetail = react.useCallback(async (id) => {
+					// 切换时间范围：立即刷新
+					function selectHours(h) {
+						setSelectedHours(h);
+						setRangeOpen(false);
+						setChartHover(null);
+						refresh(h);
+					}
+
+					const openDetail = react.useCallback(async function (id) {
 						if (!face || typeof face.readEvent !== "function") return;
 						setDetailId(id);
 						setDetailLoading(true);
@@ -68,7 +92,7 @@
 						}
 					}, [face, sessionId]);
 
-					const closeDetail = react.useCallback(() => {
+					const closeDetail = react.useCallback(function () {
 						setDetailId(null);
 						setDetail(null);
 					}, []);
@@ -95,16 +119,18 @@
 							typeof face?.setDraft === "function" ? (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								style: { border: "none", background: "none", cursor: "pointer", font: "inherit", fontSize: "11px", color: "var(--dsw-alias-state-business-primary, #818cf8)", padding: "4px 8px", marginTop: "4px" },
-								onClick: () => face.setDraft("记录一下："),
+								onClick: function () { face.setDraft("记录一下："); },
 								children: "＋ Record",
 							}) : null,
 						] });
 					}
 
-					const chart = buildChartPaths(dashboard.series, 300, 160);
-					const normGap = dashboard.normalizedGap;
-					const lastTime = dashboard.today.lastEventTime;
-					const lastClock = lastTime ? localClock(lastTime) : null;
+					// 从 dashboard metadata 构建 timeWindow
+					var timeWindow = makeTimeWindow(dashboard.hours, dashboard.generatedAt);
+					var chart = buildChartPaths(dashboard.series, 300, 160, timeWindow);
+					var normGap = dashboard.normalizedGap;
+					var lastTime = dashboard.today.lastEventTime;
+					var lastClock = lastTime ? localClock(lastTime) : null;
 
 					return (0, react_jsx_runtime.jsxs)(react.Fragment, { children: [
 						// ── Header ──
@@ -117,32 +143,29 @@
 									(0, react_jsx_runtime.jsx)("button", {
 										type: "button",
 										style: refreshHover ? { ...S.refreshBtn, ...S.refreshBtnHover } : S.refreshBtn,
-										onClick: refresh,
-										onMouseEnter: () => setRefreshHover(true),
-										onMouseLeave: () => setRefreshHover(false),
+										onClick: function () { refresh(); },
+										onMouseEnter: function () { setRefreshHover(true); },
+										onMouseLeave: function () { setRefreshHover(false); },
 										children: loading ? "…" : "↻",
 									}),
 								] }),
 							] }),
-							// ── Hero: MEL / RRI ──
 							(0, react_jsx_runtime.jsx)(HeroMetrics, { today: dashboard.today }),
-							// ── Gap ──
 							normGap !== null ? (0, react_jsx_runtime.jsxs)("div", { style: S.gapStrip, children: [
 								(0, react_jsx_runtime.jsx)("span", { style: S.gapLabel, children: "GAP" }),
 								(0, react_jsx_runtime.jsx)("span", { style: S.gapValue, children: signed(normGap) }),
 								(0, react_jsx_runtime.jsx)("span", { style: S.gapDirection, children: gapDirectionText(normGap) }),
 							] }) : null,
 						] }),
-						// ── Secondary: ROI / ARCTIC / TSA ──
 						(0, react_jsx_runtime.jsx)(SecondaryRail, { today: dashboard.today }),
 						// ── Chart ──
-						dashboard.series.length > 0 ? (0, react_jsx_runtime.jsxs)("div", {
+						(0, react_jsx_runtime.jsxs)("div", {
 							style: S.chartWrap,
 							ref: chartWrapRef,
 							children: [
 								(0, react_jsx_runtime.jsxs)("div", { style: S.chartHeader, children: [
-									(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px" }, children: [
-										(0, react_jsx_runtime.jsx)("span", { style: S.chartRange, children: `Last ${dashboard.hours}h` }),
+									(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }, children: [
+										(0, react_jsx_runtime.jsxs)("span", { style: S.chartRange, children: ["Last ", selectedHours, "h", dashboard.seriesTruncated ? " · " + dashboard.seriesReturned + " obs" : dashboard.series.length > 0 ? " · " + dashboard.series.length + " obs" : ""] }),
 										(0, react_jsx_runtime.jsxs)("div", { style: S.chartLegend, children: [
 											(0, react_jsx_runtime.jsxs)("span", { style: S.legendItem, children: [
 												(0, react_jsx_runtime.jsx)("span", { style: { ...S.legendDot, background: MEL_COLOR } }),
@@ -156,18 +179,46 @@
 											] }),
 										] }),
 									] }),
+									// ── Range selector ──
+									(0, react_jsx_runtime.jsxs)("div", { style: S.rangeSelect, ref: rangeRef, children: [
+										(0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											style: rangeOpen ? { ...S.rangeButton, ...S.rangeButtonHover } : S.rangeButton,
+											onClick: function () { setRangeOpen(function (v) { return !v; }); },
+											children: formatHoursLabel(selectedHours) + " ▾",
+										}),
+										rangeOpen ? (0, react_jsx_runtime.jsx)("div", { style: S.rangeMenu, children: CHART_HOURS_OPTIONS.map(function (h) {
+											var isActive = h === selectedHours;
+											return (0, react_jsx_runtime.jsx)("button", {
+												type: "button",
+												style: isActive ? { ...S.rangeOption, ...S.rangeOptionActive } : S.rangeOption,
+												onClick: function () { selectHours(h); },
+												onMouseEnter: function (e) { if (!isActive) e.currentTarget.style.background = "var(--dsw-alias-interactive-bg-hover)"; },
+												onMouseLeave: function (e) { if (!isActive) e.currentTarget.style.background = "none"; },
+												children: formatHoursLabel(h),
+											}, h);
+										}) }) : null,
+									] }),
 								] }),
-								(0, react_jsx_runtime.jsx)(MelRriChart, {
-									chart: chart,
-									hoverIndex: chartHover ? chartHover.index : null,
-									onHover: setChartHover,
-									onLeave: () => setChartHover(null),
-								}),
-								chartHover ? (0, react_jsx_runtime.jsx)(ChartTooltip, { hover: chartHover, chart: chart, containerRef: chartWrapRef }) : null,
+								chart.empty ? (0, react_jsx_runtime.jsxs)("div", { children: [
+									(0, react_jsx_runtime.jsx)(MelRriChart, {
+										chart: chart,
+										hoverIndex: chartHover ? chartHover.index : null,
+										onHover: setChartHover,
+										onLeave: function () { setChartHover(null); },
+									}),
+									(0, react_jsx_runtime.jsx)("div", { style: { textAlign: "center", padding: "8px 0 0", fontSize: "10px", color: "var(--dsw-alias-label-caption)" }, children: "No observations in this window" }),
+								] }) : (0, react_jsx_runtime.jsxs)("div", { children: [
+									(0, react_jsx_runtime.jsx)(MelRriChart, {
+										chart: chart,
+										hoverIndex: chartHover ? chartHover.index : null,
+										onHover: setChartHover,
+										onLeave: function () { setChartHover(null); },
+									}),
+									chartHover ? (0, react_jsx_runtime.jsx)(ChartTooltip, { hover: chartHover, chart: chart, containerRef: chartWrapRef }) : null,
+								] }),
 							],
-						}) : (0, react_jsx_runtime.jsx)("div", { style: S.chartWrap, children: (0, react_jsx_runtime.jsxs)("div", { style: S.chartEmpty, children: [
-							(0, react_jsx_runtime.jsx)("span", { style: S.chartEmptyText, children: "No chart data in this window." }),
-						] }) }),
+						}),
 						// ── Today Strip ──
 						(0, react_jsx_runtime.jsxs)("div", { style: S.todayStrip, children: [
 							(0, react_jsx_runtime.jsxs)("div", { style: S.todayLeft, children: [
@@ -176,7 +227,7 @@
 									dashboard.today.count,
 									" event",
 									dashboard.today.count !== 1 ? "s" : "",
-									lastClock ? ` · last ${lastClock}` : "",
+									lastClock ? " · last " + lastClock : "",
 								] }),
 							] }),
 						] }),
@@ -262,7 +313,7 @@
 					var hoverIndex = props.hoverIndex;
 					var onHover = props.onHover;
 					var onLeave = props.onLeave;
-					if (!chart || chart.empty) return null;
+					if (!chart) return null;
 
 					function handleMouseMove(e) {
 						if (!chart.hoverData || chart.hoverData.length === 0) return;
@@ -344,13 +395,12 @@
 					var containerRect = containerRef.current ? containerRef.current.getBoundingClientRect() : null;
 					var left = containerRect ? hover.mouseX - containerRect.left + 12 : 0;
 					var top = containerRect ? hover.mouseY - containerRect.top - 10 : 0;
-					// 边界修正
 					if (containerRect && left > containerRect.width - 140) left = left - 152;
 					if (top < 0) top = 8;
 					return (0, react_jsx_runtime.jsxs)("div", {
 						style: { ...S.tooltip, left: left + "px", top: top + "px" },
 						children: [
-							(0, react_jsx_runtime.jsx)("div", { style: S.tooltipTime, children: d.time ? localClock(d.time) : "" }),
+							(0, react_jsx_runtime.jsx)("div", { style: S.tooltipTime, children: d.time ? localTimeFull(d.time) : "" }),
 							d.mel != null ? (0, react_jsx_runtime.jsxs)("div", { style: S.tooltipRow, children: [
 								(0, react_jsx_runtime.jsx)("span", { style: S.tooltipLabel, children: "MEL" }),
 								(0, react_jsx_runtime.jsxs)("span", { style: S.tooltipVal, children: [d.mel, " → ", d.normalizedMel] }),

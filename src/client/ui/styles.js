@@ -47,6 +47,15 @@
 					chartEmpty: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", padding: "24px 16px", textAlign: "center" },
 					chartEmptyText: { fontSize: "11px", color: "var(--dsw-alias-label-caption)" },
 
+					// ── Range Selector ──
+					rangeSelect: { position: "relative", display: "inline-block" },
+					rangeButton: { border: "1px solid var(--dsw-alias-border-l2)", background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.03))", color: "var(--dsw-alias-label-secondary)", borderRadius: "4px", padding: "2px 6px", fontSize: "10px", fontVariantNumeric: "tabular-nums", cursor: "pointer", lineHeight: 1.4, letterSpacing: "0.01em", font: "inherit" },
+					rangeButtonHover: { background: "var(--dsw-alias-interactive-bg-hover)" },
+					rangeMenu: { position: "absolute", top: "100%", right: 0, marginTop: "2px", background: "var(--dsw-alias-bg-elevated, #1a1a24)", border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "4px", padding: "2px 0", zIndex: 20, minWidth: "56px", boxShadow: "0 4px 12px rgba(0,0,0,0.3)" },
+					rangeOption: { display: "block", width: "100%", padding: "4px 10px", fontSize: "10px", fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-secondary)", background: "none", border: "none", cursor: "pointer", textAlign: "right", font: "inherit", lineHeight: 1.6, letterSpacing: "0.01em" },
+					rangeOptionActive: { color: "var(--dsw-alias-label-primary)", fontWeight: 600, background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.04))" },
+					rangeOptionHover: { background: "var(--dsw-alias-interactive-bg-hover)" },
+
 					// ── Tooltip (floating, positioned by JS) ──
 					tooltip: { position: "absolute", pointerEvents: "none", background: "var(--dsw-alias-bg-elevated, rgba(20,20,28,0.95))", border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "6px", padding: "8px 10px", fontSize: "10px", lineHeight: 1.5, zIndex: 10, minWidth: "120px", boxShadow: "0 4px 12px rgba(0,0,0,0.3)", fontVariantNumeric: "tabular-nums", transition: "opacity 0.1s ease" },
 					tooltipTime: { fontSize: "11px", fontWeight: 600, color: "var(--dsw-alias-label-primary)", marginBottom: "4px", letterSpacing: "0.01em" },

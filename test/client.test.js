@@ -46,7 +46,14 @@ const {
   trimForList,
   resultTextOfBlocks,
   buildChartPaths,
+  generateWindowTicks,
+  scaleTimeX,
   localClock,
+  localTimeFull,
+  CHART_HOURS_OPTIONS,
+  DEFAULT_CHART_HOURS,
+  formatHoursLabel,
+  makeTimeWindow,
   INTROSPECT_TOOLS,
 } = runtime.internals
 
@@ -131,35 +138,41 @@ test('localClock returns HH:mm in the browser timezone', () => {
   assert.equal(localClock(null), '')
 })
 
-test('buildChartPaths generates two plottable lines with time ticks and a current-dot', () => {
+test('buildChartPaths generates time-based plottable lines with ticks and endpoints', () => {
+  const startMs = Date.parse('2026-05-01T00:00:00Z')
+  const endMs = Date.parse('2026-05-01T04:00:00Z')
+  const tw = { startMs, endMs, hours: 4 }
   const series = [
     { time: '2026-05-01T01:00:00Z', mel: 96, rri: 12, summary: 'A' },
     { time: '2026-05-01T02:00:00Z', mel: 60, rri: 90, summary: 'B' },
     { time: '2026-05-01T03:00:00Z', mel: 92, rri: null, summary: 'C' },
   ]
-  const chart = buildChartPaths(series, 300, 160)
+  const chart = buildChartPaths(series, 300, 160, tw)
   assert.equal(chart.empty, false)
   assert.match(chart.mel.path, /^M/)
   assert.match(chart.rri.path, /^M/)
-  assert.ok(chart.xTicks.length >= 2, 'should have time axis ticks')
+  assert.ok(chart.xTicks.length >= 2, 'should have time axis ticks from window')
   assert.ok(chart.yGrid.length >= 2, 'should have Y axis grid')
   assert.ok(chart.current.length >= 1)
   assert.ok(chart.hoverData.length === 3, 'hover data for each point')
   assert.match(chart.viewBox, /0 0 300 160/)
-  const empty = buildChartPaths([], 300, 160)
+  // Empty window still has ticks
+  const empty = buildChartPaths([], 300, 160, tw)
   assert.equal(empty.empty, true)
-  const dimmed = buildChartPaths(series, 0, 0)
+  assert.ok(empty.xTicks.length >= 4, 'empty window still has full time axis')
+  const dimmed = buildChartPaths(series, 0, 0, tw)
   assert.equal(dimmed.empty, false)
   assert.ok(dimmed.width > 0 && dimmed.height > 0)
 })
 
 test('buildChartPaths treats nulls as gaps, not as zeros', () => {
+  const tw = { startMs: Date.parse('2026-05-01T00:00:00Z'), endMs: Date.parse('2026-05-01T04:00:00Z'), hours: 4 }
   const series = [
     { time: '2026-05-01T01:00:00Z', mel: 90, rri: 80 },
     { time: '2026-05-01T02:00:00Z', mel: null, rri: 70 },
     { time: '2026-05-01T03:00:00Z', mel: 85, rri: 75 },
   ]
-  const chart = buildChartPaths(series, 200, 80)
+  const chart = buildChartPaths(series, 200, 80, tw)
   assert.equal(chart.gap, null, '中间有 null 的段不应生成填色区域')
   assert.ok(chart.mel.path.includes('M'))
   assert.ok(chart.rri.path.includes('L'))
@@ -172,4 +185,126 @@ test('resultTextOfBlocks joins only text blocks', () => {
 
 test('the exported apply accepts exactly the expected inject set', () => {
   assert.equal(JSON.stringify(loadClient().runtime.inject), JSON.stringify(['slots']))
+})
+
+// ── Time-axis correctness tests ──
+
+test('scaleTimeX positions points by real timestamp, not index', () => {
+  const area = { left: 32, top: 12, w: 256, h: 122 }
+  const startMs = Date.parse('2026-05-01T00:00:00Z')
+  const endMs = Date.parse('2026-05-01T01:00:00Z') // 1 hour
+  // Point at 00:05 (8.3% of window)
+  const x5 = scaleTimeX(Date.parse('2026-05-01T00:05:00Z'), startMs, endMs, area)
+  // Point at 00:55 (91.7% of window)
+  const x55 = scaleTimeX(Date.parse('2026-05-01T00:55:00Z'), startMs, endMs, area)
+  assert.ok(x5 < area.left + area.w * 0.15, '00:05 should be near left edge (~8%)')
+  assert.ok(x55 > area.left + area.w * 0.85, '00:55 should be near right edge (~92%)')
+  assert.ok(x55 - x5 > area.w * 0.7, '00:05 and 00:55 should be far apart')
+})
+
+test('scaleTimeX single point at 75% of window is at 75%, not 50%', () => {
+  const area = { left: 0, top: 0, w: 300, h: 100 }
+  const startMs = 0
+  const endMs = 3600000 // 1 hour
+  const eventMs = 2700000 // 45 min = 75%
+  const x = scaleTimeX(eventMs, startMs, endMs, area)
+  assert.ok(Math.abs(x - 225) < 1, '75% of 300 = 225, got ' + x)
+})
+
+test('scaleTimeX handles unequal time intervals correctly', () => {
+  const area = { left: 0, top: 0, w: 300, h: 100 }
+  const startMs = 0
+  const endMs = 3600000 // 1 hour
+  // 00:00, 00:01, 00:59
+  const x0 = scaleTimeX(0, startMs, endMs, area)
+  const x1 = scaleTimeX(60000, startMs, endMs, area)
+  const x59 = scaleTimeX(3540000, startMs, endMs, area)
+  // 1 min vs 58 min gap
+  assert.ok(Math.abs(x1 - x0) <= 5, '00:00 and 00:01 should be very close')
+  assert.ok(x59 - x1 > 280, '00:01 and 00:59 should be far apart')
+})
+
+test('buildChartPaths with time window positions points by timestamp', () => {
+  const startMs = Date.parse('2026-05-01T00:00:00Z')
+  const endMs = Date.parse('2026-05-01T01:00:00Z')
+  const tw = { startMs, endMs, hours: 1 }
+  const series = [
+    { time: '2026-05-01T00:05:00Z', mel: 80, rri: 40 },  // ~8%
+    { time: '2026-05-01T00:55:00Z', mel: 100, rri: 60 },  // ~92%
+  ]
+  const chart = buildChartPaths(series, 300, 160, tw)
+  const hoverData = chart.hoverData
+  assert.equal(hoverData.length, 2)
+  // First point should be far left, second far right
+  assert.ok(hoverData[0].x < chart.width * 0.2, 'point at 00:05 should be in left 20%')
+  assert.ok(hoverData[1].x > chart.width * 0.8, 'point at 00:55 should be in right 80%')
+})
+
+test('generateWindowTicks produces ticks from window, not data', () => {
+  // 1H window: should have ticks at 15-min intervals
+  const now = Date.now()
+  const start1h = now - 3600000
+  const ticks1h = generateWindowTicks({ startMs: start1h, endMs: now, hours: 1 })
+  assert.ok(ticks1h.length >= 3, '1H should have at least 3 ticks')
+  // All ticks should be HH:mm format
+  for (const t of ticks1h) assert.match(t.label, /^\d{2}:\d{2}$/, 'tick label is HH:mm')
+
+  // 6H window: should have ticks at 1-hour intervals
+  const start6h = now - 6 * 3600000
+  const ticks6h = generateWindowTicks({ startMs: start6h, endMs: now, hours: 6 })
+  assert.ok(ticks6h.length >= 5, '6H should have at least 5 ticks')
+  // Ticks should be ordered by time
+  for (let i = 1; i < ticks6h.length; i++) {
+    assert.ok(ticks6h[i].ms > ticks6h[i - 1].ms, 'ticks are ordered')
+  }
+})
+
+test('generateWindowTicks works for empty window (no data needed)', () => {
+  const startMs = Date.parse('2026-05-01T10:00:00Z')
+  const endMs = Date.parse('2026-05-01T16:00:00Z')
+  const ticks = generateWindowTicks({ startMs, endMs, hours: 6 })
+  assert.ok(ticks.length >= 4, 'empty 6H window still has ticks')
+  // First tick should be at or near start
+  assert.ok(ticks[0].ms >= startMs - 3600000, 'first tick near window start')
+  // Last tick should be at or near end
+  assert.ok(ticks[ticks.length - 1].ms <= endMs + 3600000, 'last tick near window end')
+})
+
+test('generateWindowTicks handles 48H and 72H with date labels', () => {
+  const startMs = Date.parse('2026-09-16T00:00:00Z')
+  const endMs = Date.parse('2026-09-18T00:00:00Z') // 48H
+  const ticks = generateWindowTicks({ startMs, endMs, hours: 48 })
+  assert.ok(ticks.length >= 4, '48H should have multiple ticks')
+  // Should include date info for cross-day
+  const hasDate = ticks.some(t => t.label.includes('-'))
+  assert.ok(hasDate, '48H ticks should include date info')
+})
+
+test('CHART_HOURS_OPTIONS has exactly seven fixed ranges', () => {
+  assert.equal(CHART_HOURS_OPTIONS.length, 7)
+  assert.deepEqual([...CHART_HOURS_OPTIONS], [1, 3, 6, 12, 24, 48, 72])
+  assert.equal(DEFAULT_CHART_HOURS, 1)
+})
+
+test('formatHoursLabel formats the seven ranges', () => {
+  assert.equal(formatHoursLabel(1), '1H')
+  assert.equal(formatHoursLabel(3), '3H')
+  assert.equal(formatHoursLabel(6), '6H')
+  assert.equal(formatHoursLabel(12), '12H')
+  assert.equal(formatHoursLabel(24), '24H')
+  assert.equal(formatHoursLabel(48), '48H')
+  assert.equal(formatHoursLabel(72), '72H')
+})
+
+test('makeTimeWindow builds correct start/end from hours and generatedAt', () => {
+  const tw = makeTimeWindow(6, '2026-09-17T15:40:00Z')
+  assert.equal(tw.hours, 6)
+  assert.equal(tw.endMs, Date.parse('2026-09-17T15:40:00Z'))
+  assert.equal(tw.startMs, Date.parse('2026-09-17T09:40:00Z'))
+  assert.equal(tw.endMs - tw.startMs, 6 * 3600000)
+})
+
+test('localTimeFull includes date for cross-day tooltips', () => {
+  const full = localTimeFull('2026-09-17T15:03:00Z')
+  assert.match(full, /\d{2}-\d{2} \d{2}:\d{2}/)
 })

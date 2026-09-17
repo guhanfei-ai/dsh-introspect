@@ -88,24 +88,31 @@ export function buildDashboard(db, options = {}) {
     tzOffsetMinutes = new Date().getTimezoneOffset(),
     hours = 24,
     recentLimit = 8,
-    seriesLimit = 60,
+    seriesLimit = 200,
   } = options
   const today = buildToday(db, { nowMs, tzOffsetMinutes })
   const windowStart = new Date(nowMs - hours * 3_600_000).toISOString()
-  const windowEnd = new Date(nowMs + 60_000).toISOString()
+  const windowEnd = new Date(nowMs).toISOString()
   const windowOptions = { from: windowStart, to: windowEnd }
   const windowAgg = aggregateWindow(db, windowOptions)
+  const seriesResult = buildSeries(db, { hours, limit: seriesLimit, nowMs })
+  const seriesTotal = countEvents(db, windowOptions)
   return {
     ok: true,
     op: 'dashboard',
-    generatedAt: new Date(nowMs).toISOString(),
+    generatedAt: windowEnd,
     hours,
+    windowStart,
+    windowEnd,
     totals: totalEvents(db),
     today,
     window: windowAgg,
     normalizedGap: normalizedGap(today.mel, today.rri),
     windowNormalizedGap: normalizedGap(windowAgg.mel, windowAgg.rri),
-    series: buildSeries(db, { hours, limit: seriesLimit, nowMs }),
+    series: seriesResult,
+    seriesTruncated: seriesTotal > seriesLimit,
+    seriesReturned: seriesResult.length,
+    seriesTotal,
     recent: recentEvents(db, recentLimit).map(listView),
     tags: tagCounts(db, { ...windowOptions, limit: 6 }),
     quadrant: quadrantCounts(db, windowOptions),

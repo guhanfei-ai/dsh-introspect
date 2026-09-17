@@ -136,4 +136,21 @@
 					if (value <= 80) return { key: "high", label: "high" };
 					return { key: "very_high", label: "very high" };
 				}
+
+				/** 七档固定时间窗口。 */
+				var CHART_HOURS_OPTIONS = [1, 3, 6, 12, 24, 48, 72];
+				var DEFAULT_CHART_HOURS = 1;
+
+				/** 格式化 range label。 */
+				function formatHoursLabel(h) {
+					if (h <= 1) return "1H";
+					return h + "H";
+				}
+
+				/** 构建 timeWindow 对象（供 buildChartPaths 使用）。 */
+				function makeTimeWindow(hours, generatedAt) {
+					var endMs = generatedAt ? new Date(generatedAt).getTime() : Date.now();
+					if (!Number.isFinite(endMs)) endMs = Date.now();
+					return { startMs: endMs - hours * 3600000, endMs: endMs, hours: hours };
+				}
 			//#endregion

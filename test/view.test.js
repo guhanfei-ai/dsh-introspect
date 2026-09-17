@@ -119,13 +119,23 @@ describe('dashboard payload', () => {
     assert.equal(value.ok, true)
     assert.equal(value.today.count, 2)
     assert.equal(value.window.count, 2)
-    assert.ok(value.series.length <= 60)
+    assert.ok(value.series.length <= 200)
     assert.equal(value.recent.length, 3)
     assert.equal(value.recent[0].summary, '又刷了一会信息流')
     assert.equal(value.totals.count, 5)
     assert.ok(Array.isArray(value.tags))
     assert.equal(value.quadrant.measured, 1, '24h 窗口里只有「写完并 commit」两个维度都已知')
     assert.equal(value.quadrant.high_high, 1)
+    // Window metadata contract
+    assert.ok(typeof value.windowStart === 'string', 'windowStart is ISO string')
+    assert.ok(typeof value.windowEnd === 'string', 'windowEnd is ISO string')
+    assert.ok(typeof value.generatedAt === 'string', 'generatedAt is ISO string')
+    assert.equal(value.hours, 24)
+    // windowEnd - windowStart ≈ hours
+    const spanMs = new Date(value.windowEnd) - new Date(value.windowStart)
+    assert.ok(Math.abs(spanMs - 24 * 3600000) < 2000, 'window span ≈ 24h')
+    assert.equal(typeof value.seriesTruncated, 'boolean', 'seriesTruncated is boolean')
+    assert.equal(typeof value.seriesReturned, 'number', 'seriesReturned is number')
   })
 
   it('stays small enough for a narrow panel', () => {

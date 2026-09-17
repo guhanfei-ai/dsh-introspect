@@ -159,6 +159,23 @@ window.__ModuleLoader__.load({
 					if (value <= 80) return { key: "high", label: "high" };
 					return { key: "very_high", label: "very high" };
 				}
+
+				/** 七档固定时间窗口。 */
+				var CHART_HOURS_OPTIONS = [1, 3, 6, 12, 24, 48, 72];
+				var DEFAULT_CHART_HOURS = 1;
+
+				/** 格式化 range label。 */
+				function formatHoursLabel(h) {
+					if (h <= 1) return "1H";
+					return h + "H";
+				}
+
+				/** 构建 timeWindow 对象（供 buildChartPaths 使用）。 */
+				function makeTimeWindow(hours, generatedAt) {
+					var endMs = generatedAt ? new Date(generatedAt).getTime() : Date.now();
+					if (!Number.isFinite(endMs)) endMs = Date.now();
+					return { startMs: endMs - hours * 3600000, endMs: endMs, hours: hours };
+				}
 			//#endregion
 
 				//#region MEL × RRI 纯 SVG 图表 — observability-grade time series
@@ -181,14 +198,18 @@ window.__ModuleLoader__.load({
 					return { left, top, w, h };
 				}
 
-				function scaleX(index, count, area) {
-					if (count <= 1) return area.left + area.w * 0.5;
-					return area.left + (index / (count - 1)) * area.w;
-				}
-
 				function scaleY(value100, area) {
 					if (value100 == null || !Number.isFinite(value100)) return null;
 					return area.top + area.h - Math.max(0, Math.min(100, value100)) * area.h / 100;
+				}
+
+				/** 时间 → x 坐标：按真实 timestamp 在 window 中的比例定位。 */
+				function scaleTimeX(timeMs, startMs, endMs, area) {
+					if (!Number.isFinite(timeMs) || !Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+					const span = endMs - startMs;
+					if (span <= 0) return area.left + area.w * 0.5;
+					const ratio = (timeMs - startMs) / span;
+					return area.left + Math.max(0, Math.min(1, ratio)) * area.w;
 				}
 
 				function polylinePath(points) {
@@ -225,181 +246,150 @@ window.__ModuleLoader__.load({
 					return null;
 				}
 
-				//#region 时间轴刻度生成
-				/** ISO → Date ms，容错。 */
+				//#region 时间轴刻度生成 — 基于固定 window
 				function timeMs(iso) {
 					if (!iso) return NaN;
 					const ms = new Date(String(iso)).getTime();
 					return Number.isFinite(ms) ? ms : NaN;
 				}
 
-				/** HH:mm 格式。 */
 				function fmtHHmm(ms) {
 					const d = new Date(ms);
 					return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
 				}
 
-				/** MM-DD 格式。 */
 				function fmtMMdd(ms) {
 					const d = new Date(ms);
 					return String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 				}
 
-				/** MM-DD HH:mm 格式。 */
-				function fmtFull(ms) {
-					return fmtMMdd(ms) + " " + fmtHHmm(ms);
-				}
-
-				/** 对齐到整 N 分钟。 */
 				function snapMinute(ms, step) {
 					return Math.floor(ms / (step * 60000)) * (step * 60000);
 				}
 
-				/** 对齐到整小时。 */
 				function snapHour(ms) {
 					return Math.floor(ms / 3600000) * 3600000;
 				}
 
-				/** 对齐到本地午夜。 */
-				function snapDay(ms) {
+				function snapLocalMidnight(ms) {
 					const d = new Date(ms);
 					d.setHours(0, 0, 0, 0);
 					return d.getTime();
 				}
 
+				/** 每个 range 的建议 tick 间隔（分钟）。 */
+				const TICK_INTERVALS = {
+					1: 15,
+					3: 30,
+					6: 60,
+					12: 120,
+					24: 240,
+					48: 480,
+					72: 720,
+				};
+
 				/**
-				 * 根据时间范围生成合理的时间轴刻度。
-				 * 返回 [{ms, label}, ...]，保证2-5个刻度，不超出数据范围。
+				 * 从固定时间窗口生成 X 轴刻度。
+				 * 不依赖数据——即使 series 为空也必须生成完整时间轴。
+				 * @param {{startMs: number, endMs: number, hours: number}} window
+				 * @returns {{ms: number, label: string}[]}
 				 */
-				function generateTimeTicks(series) {
-					const times = [];
-					for (const p of series) {
-						const ms = timeMs(p.time);
-						if (Number.isFinite(ms)) times.push(ms);
-					}
-					if (times.length === 0) return [];
-					const lo = times[0];
-					const hi = times[times.length - 1];
-					const span = hi - lo;
-					if (span <= 0) return [{ ms: lo, label: fmtHHmm(lo) }];
-					const HOUR = 3600000;
-					const DAY = 86400000;
+				function generateWindowTicks(window) {
+					const { startMs, endMs, hours } = window;
+					if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return [];
+					const intervalMin = TICK_INTERVALS[hours] || 60;
+					const intervalMs = intervalMin * 60000;
+					const crossDay = new Date(startMs).getDate() !== new Date(endMs).getDate();
+					const needDate = hours >= 24 || crossDay;
 					const result = [];
-					if (span <= 10 * 60000) {
-						// <10min: 每2分钟一个刻度
-						let t = snapMinute(lo, 2);
-						for (; t <= hi + 60000; t += 2 * 60000) {
-							if (t >= lo - 60000) result.push({ ms: t, label: fmtHHmm(t) });
-						}
-					} else if (span <= HOUR) {
-						// <1h: 每5/10/15分钟一个刻度
-						const step = span <= 20 * 60000 ? 5 : span <= 40 * 60000 ? 10 : 15;
-						let t = snapMinute(lo, step);
-						for (; t <= hi + 60000; t += step * 60000) {
-							if (t >= lo - 60000) result.push({ ms: t, label: fmtHHmm(t) });
-						}
-					} else if (span <= 6 * HOUR) {
-						// <6h: 每30分钟或每小时
-						const stepMin = span <= 3 * HOUR ? 30 : 60;
-						let t = snapMinute(lo, stepMin);
-						for (; t <= hi + 60000; t += stepMin * 60000) {
-							if (t >= lo - 60000) result.push({ ms: t, label: fmtHHmm(t) });
-						}
-					} else if (span <= 24 * HOUR) {
-						// <24h: 每2小时或3小时
-						const stepH = span <= 12 * HOUR ? 2 : 3;
-						let t = snapHour(lo);
-						for (; t <= hi + 60000; t += stepH * HOUR) {
-							if (t >= lo - HOUR) result.push({ ms: t, label: fmtHHmm(t) });
-						}
-					} else if (span <= 3 * DAY) {
-						// <3天: 每天午夜 + 当前天的中午
-						let t = snapDay(lo);
-						for (; t <= hi + DAY; t += DAY) {
-							if (t >= lo - DAY) {
-								const d = new Date(t);
-								const label = d.getDate() === new Date(lo).getDate() && d.getMonth() === new Date(lo).getMonth()
-									? fmtHHmm(t) : fmtMMdd(t);
-								result.push({ ms: t, label });
+					// 对齐到自然时间边界
+					let t;
+					if (intervalMin >= 60) {
+						t = snapHour(startMs);
+						if (t < startMs) t += 3600000;
+						const stepHours = intervalMin / 60;
+						while (t <= endMs) {
+							const h = new Date(t).getHours();
+							if (stepHours <= 1 || h % stepHours === 0) {
+								result.push({ ms: t, label: needDate ? fmtMMdd(t) + " " + fmtHHmm(t) : fmtHHmm(t) });
 							}
+							t += 3600000;
 						}
 					} else {
-						// >3天: 每天一个日期刻度
-						let t = snapDay(lo);
-						for (; t <= hi + DAY; t += DAY) {
-							if (t >= lo - DAY) result.push({ ms: t, label: fmtMMdd(t) });
+						t = snapMinute(startMs, intervalMin);
+						if (t < startMs) t += intervalMs;
+						while (t <= endMs) {
+							result.push({ ms: t, label: fmtHHmm(t) });
+							t += intervalMs;
 						}
 					}
-					// 首尾保底
+					// 首尾保底：确保第一个和最后一个 tick 存在
 					if (result.length === 0) {
-						result.push({ ms: lo, label: fmtHHmm(lo) });
-						if (span > 0) result.push({ ms: hi, label: fmtHHmm(hi) });
+						result.push({ ms: startMs, label: needDate ? fmtMMdd(startMs) + " " + fmtHHmm(startMs) : fmtHHmm(startMs) });
+						result.push({ ms: endMs, label: needDate ? fmtMMdd(endMs) + " " + fmtHHmm(endMs) : fmtHHmm(endMs) });
 					} else {
-						// 确保第一个刻度不晚于数据起点
-						if (result[0].ms > lo + span * 0.15) {
-							result.unshift({ ms: lo, label: fmtHHmm(lo) });
+						if (result[0].ms > startMs + (endMs - startMs) * 0.2) {
+							result.unshift({ ms: startMs, label: needDate ? fmtMMdd(startMs) + " " + fmtHHmm(startMs) : fmtHHmm(startMs) });
 						}
-						// 确保最后一个刻度不早于数据终点
-						if (result[result.length - 1].ms < hi - span * 0.15) {
-							result.push({ ms: hi, label: fmtHHmm(hi) });
+						if (result[result.length - 1].ms < endMs - (endMs - startMs) * 0.2) {
+							result.push({ ms: endMs, label: needDate ? fmtMMdd(endMs) + " " + fmtHHmm(endMs) : fmtHHmm(endMs) });
 						}
 					}
 					return result;
 				}
-
-				/** 将时间刻度映射到图表 x 坐标。 */
-				function mapTimeTicksToX(ticks, series, area) {
-					if (ticks.length === 0 || series.length === 0) return [];
-					const times = series.map((p) => timeMs(p.time));
-					const lo = times[0];
-					const hi = times[times.length - 1];
-					const span = hi - lo;
-					return ticks.map((tick) => {
-						const ratio = span > 0 ? (tick.ms - lo) / span : 0.5;
-						const x = area.left + Math.max(0, Math.min(1, ratio)) * area.w;
-						return { ...tick, x: x.toFixed(1) };
-					});
-				}
 				//#endregion
 
 				/**
-				 * 纯函数：从时间序列数据算出整个 SVG 的几何信息。
-				 * 返回值交给 React 组件做纯渲染，不做任何计算。
+				 * 纯函数：从时间序列 + 固定时间窗口算出 SVG 几何。
+				 * 现在 x 轴由 windowStart→windowEnd 决定，点按真实 timestamp 定位。
 				 *
-				 * 新增：
-				 * - 使用 normalized MEL/2 绘图（与 RRI 同 0-100 轴）
-				 * - 时间轴刻度基于真实时间映射
-				 * - Y 轴网格线
-				 * - hoverData 用于 crosshair/tooltip
-				 * - sparse data 优雅处理
+				 * @param {Array} series - 时间序列数据
+				 * @param {number} width
+				 * @param {number} height
+				 * @param {{startMs: number, endMs: number, hours: number}} timeWindow - 固定时间窗口
 				 */
-				function buildChartPaths(series, width, height) {
+				function buildChartPaths(series, width, height, timeWindow) {
 					const w = typeof width === "number" && width > 0 ? width : CHART_DEFAULTS.width;
 					const h = typeof height === "number" && height > 0 ? height : CHART_DEFAULTS.height;
 					const area = plotArea(w, h);
+					const startMs = timeWindow && Number.isFinite(timeWindow.startMs) ? timeWindow.startMs : 0;
+					const endMs = timeWindow && Number.isFinite(timeWindow.endMs) ? timeWindow.endMs : 1;
+					const hours = timeWindow && Number.isFinite(timeWindow.hours) ? timeWindow.hours : 1;
+					// X 轴刻度：基于 window，不依赖数据
+					const rawTicks = generateWindowTicks({ startMs, endMs, hours });
+					const xTicks = rawTicks.map(function (tick) {
+						return { ms: tick.ms, label: tick.label, x: scaleTimeX(tick.ms, startMs, endMs, area).toFixed(1) };
+					});
+					// Y 轴网格
+					const yGrid = [0, 50, 100].map(function (v) {
+						return { value: v, y: scaleY(v, area).toFixed(1), label: String(v) };
+					});
 					if (!Array.isArray(series) || series.length === 0) {
-						return { viewBox: `0 0 ${w} ${h}`, width: w, height: h, empty: true, mel: null, rri: null, gap: null, xTicks: [], yGrid: [], current: [], hoverData: null };
+						return { viewBox: `0 0 ${w} ${h}`, width: w, height: h, empty: true, mel: null, rri: null, gap: null, xTicks: xTicks, yGrid: yGrid, current: [], hoverData: [] };
 					}
-					const n = series.length;
-					// 归一化：MEL / 2 → 0-100，RRI → 0-100
-					const coords = series.map((point, i) => ({
-						x: scaleX(i, n, area),
-						melY: scaleY(normalizeTo100(point.mel != null ? point.mel / 2 : null, MEL_MAX / 2), area),
-						rriY: scaleY(normalizeTo100(point.rri, RRI_MAX), area),
-						mel: point.mel,
-						rri: point.rri,
-						time: point.time,
-						summary: point.summary ?? "",
-					}));
-					const melPath = polylinePath(coords.map((c) => ({ x: c.x, y: c.melY })));
-					const rriPath = polylinePath(coords.map((c) => ({ x: c.x, y: c.rriY })));
+					// 按真实 timestamp 定位每个点
+					const coords = series.map(function (point) {
+						const ms = timeMs(point.time);
+						return {
+							x: scaleTimeX(ms, startMs, endMs, area),
+							melY: scaleY(normalizeTo100(point.mel != null ? point.mel / 2 : null, MEL_MAX / 2), area),
+							rriY: scaleY(normalizeTo100(point.rri, RRI_MAX), area),
+							mel: point.mel,
+							rri: point.rri,
+							time: point.time,
+							timeMs: ms,
+							summary: point.summary ?? "",
+						};
+					});
+					const melPath = polylinePath(coords.map(function (c) { return { x: c.x, y: c.melY }; }));
+					const rriPath = polylinePath(coords.map(function (c) { return { x: c.x, y: c.rriY }; }));
 					// Gap area: normalized MEL/2 vs RRI
-					let gapPath = "";
+					var gapPath = "";
 					if (coords.length >= 2) {
-						let lastBothKnown = false;
-						let segStart = -1;
-						for (let i = 0; i < coords.length; i++) {
-							const both = coords[i].melY != null && coords[i].rriY != null;
+						var lastBothKnown = false;
+						var segStart = -1;
+						for (var i = 0; i < coords.length; i++) {
+							var both = coords[i].melY != null && coords[i].rriY != null;
 							if (both && !lastBothKnown) segStart = i;
 							if (!both && lastBothKnown && segStart >= 0) {
 								gapPath += buildGapSegment(coords, segStart, i);
@@ -409,60 +399,60 @@ window.__ModuleLoader__.load({
 						}
 						if (lastBothKnown && segStart >= 0) gapPath += buildGapSegment(coords, segStart, coords.length);
 					}
-					// 时间轴刻度：基于真实时间映射
-					const rawTicks = generateTimeTicks(series);
-					const xTicks = mapTimeTicksToX(rawTicks, series, area);
-					// Y 轴网格：0, 50, 100
-					const yGrid = [0, 50, 100].map((v) => ({
-						value: v,
-						y: scaleY(v, area).toFixed(1),
-						label: String(v),
-					}));
-					// 当前值端点
-					const melLast = lastNonNull(series, "mel");
-					const rriLast = lastNonNull(series, "rri");
-					const current = [];
-					if (melLast) current.push({
-						label: "MEL", value: melLast.value,
-						normalized: Math.round(melLast.value / 2),
-						x: scaleX(melLast.index, n, area), y: scaleY(normalizeTo100(melLast.value / 2, MEL_MAX / 2), area),
-						color: MEL_COLOR,
+					// 当前值端点（最后一个非空值）
+					var melLast = lastNonNull(series, "mel");
+					var rriLast = lastNonNull(series, "rri");
+					var current = [];
+					if (melLast) {
+						var melMs = timeMs(series[melLast.index].time);
+						current.push({
+							label: "MEL", value: melLast.value,
+							normalized: Math.round(melLast.value / 2),
+							x: scaleTimeX(melMs, startMs, endMs, area), y: scaleY(normalizeTo100(melLast.value / 2, MEL_MAX / 2), area),
+							color: MEL_COLOR,
+						});
+					}
+					if (rriLast) {
+						var rriMs = timeMs(series[rriLast.index].time);
+						current.push({
+							label: "RRI", value: rriLast.value,
+							normalized: rriLast.value,
+							x: scaleTimeX(rriMs, startMs, endMs, area), y: scaleY(normalizeTo100(rriLast.value, RRI_MAX), area),
+							color: RRI_COLOR,
+						});
+					}
+					// hover 数据
+					var hoverData = coords.map(function (c, i) {
+						return {
+							index: i,
+							x: c.x,
+							melY: c.melY,
+							rriY: c.rriY,
+							mel: c.mel,
+							rri: c.rri,
+							normalizedMel: c.mel != null ? Math.round(c.mel / 2) : null,
+							gap: (typeof c.mel === "number" && typeof c.rri === "number") ? Math.round((c.mel / 2 - c.rri) * 100) / 100 : null,
+							time: c.time,
+							timeMs: c.timeMs,
+							summary: c.summary,
+						};
 					});
-					if (rriLast) current.push({
-						label: "RRI", value: rriLast.value,
-						normalized: rriLast.value,
-						x: scaleX(rriLast.index, n, area), y: scaleY(normalizeTo100(rriLast.value, RRI_MAX), area),
-						color: RRI_COLOR,
-					});
-					// hover 数据：每个点的完整信息
-					const hoverData = coords.map((c, i) => ({
-						index: i,
-						x: c.x,
-						melY: c.melY,
-						rriY: c.rriY,
-						mel: c.mel,
-						rri: c.rri,
-						normalizedMel: c.mel != null ? Math.round(c.mel / 2) : null,
-						gap: (typeof c.mel === "number" && typeof c.rri === "number") ? Math.round((c.mel / 2 - c.rri) * 100) / 100 : null,
-						time: c.time,
-						summary: c.summary,
-					}));
 					return {
 						viewBox: `0 0 ${w} ${h}`,
 						width: w,
 						height: h,
 						empty: false,
-						mel: melPath ? { path: melPath, color: MEL_COLOR, label: "MEL", last: melLast?.value ?? null } : null,
-						rri: rriPath ? { path: rriPath, color: RRI_COLOR, label: "RRI", last: rriLast?.value ?? null } : null,
+						mel: melPath ? { path: melPath, color: MEL_COLOR, label: "MEL", last: melLast ? melLast.value : null } : null,
+						rri: rriPath ? { path: rriPath, color: RRI_COLOR, label: "RRI", last: rriLast ? rriLast.value : null } : null,
 						gap: gapPath ? { path: gapPath } : null,
-						xTicks,
-						yGrid,
-						current,
-						hoverData,
+						xTicks: xTicks,
+						yGrid: yGrid,
+						current: current,
+						hoverData: hoverData,
 					};
 				}
 
-				/** 从时钟文字取本地时区 HH:mm（客户端用浏览器 Intl 即可）。 */
+				/** HH:mm 格式（tooltip 用更完整的时间）。 */
 				function localClock(iso) {
 					try {
 						const d = new Date(String(iso));
@@ -470,6 +460,21 @@ window.__ModuleLoader__.load({
 						const hh = String(d.getHours()).padStart(2, "0");
 						const mm = String(d.getMinutes()).padStart(2, "0");
 						return `${hh}:${mm}`;
+					} catch {
+						return "";
+					}
+				}
+
+				/** Tooltip 用的完整时间文字（含日期，跨日时尤其需要）。 */
+				function localTimeFull(iso) {
+					try {
+						const d = new Date(String(iso));
+						if (Number.isNaN(d.getTime())) return "";
+						const MM = String(d.getMonth() + 1).padStart(2, "0");
+						const DD = String(d.getDate()).padStart(2, "0");
+						const hh = String(d.getHours()).padStart(2, "0");
+						const mm = String(d.getMinutes()).padStart(2, "0");
+						return `${MM}-${DD} ${hh}:${mm}`;
 					} catch {
 						return "";
 					}
@@ -523,6 +528,15 @@ window.__ModuleLoader__.load({
 					chartSvg: { display: "block", width: "100%", height: "auto", cursor: "crosshair" },
 					chartEmpty: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", padding: "24px 16px", textAlign: "center" },
 					chartEmptyText: { fontSize: "11px", color: "var(--dsw-alias-label-caption)" },
+
+					// ── Range Selector ──
+					rangeSelect: { position: "relative", display: "inline-block" },
+					rangeButton: { border: "1px solid var(--dsw-alias-border-l2)", background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.03))", color: "var(--dsw-alias-label-secondary)", borderRadius: "4px", padding: "2px 6px", fontSize: "10px", fontVariantNumeric: "tabular-nums", cursor: "pointer", lineHeight: 1.4, letterSpacing: "0.01em", font: "inherit" },
+					rangeButtonHover: { background: "var(--dsw-alias-interactive-bg-hover)" },
+					rangeMenu: { position: "absolute", top: "100%", right: 0, marginTop: "2px", background: "var(--dsw-alias-bg-elevated, #1a1a24)", border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "4px", padding: "2px 0", zIndex: 20, minWidth: "56px", boxShadow: "0 4px 12px rgba(0,0,0,0.3)" },
+					rangeOption: { display: "block", width: "100%", padding: "4px 10px", fontSize: "10px", fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-secondary)", background: "none", border: "none", cursor: "pointer", textAlign: "right", font: "inherit", lineHeight: 1.6, letterSpacing: "0.01em" },
+					rangeOptionActive: { color: "var(--dsw-alias-label-primary)", fontWeight: 600, background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.04))" },
+					rangeOptionHover: { background: "var(--dsw-alias-interactive-bg-hover)" },
 
 					// ── Tooltip (floating, positioned by JS) ──
 					tooltip: { position: "absolute", pointerEvents: "none", background: "var(--dsw-alias-bg-elevated, rgba(20,20,28,0.95))", border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "6px", padding: "8px 10px", fontSize: "10px", lineHeight: 1.5, zIndex: 10, minWidth: "120px", boxShadow: "0 4px 12px rgba(0,0,0,0.3)", fontVariantNumeric: "tabular-nums", transition: "opacity 0.1s ease" },
@@ -603,27 +617,43 @@ window.__ModuleLoader__.load({
 					const [hovered, setHovered] = react.useState(null);
 					const [chartHover, setChartHover] = react.useState(null);
 					const [refreshHover, setRefreshHover] = react.useState(false);
+					const [selectedHours, setSelectedHours] = react.useState(DEFAULT_CHART_HOURS);
+					const [rangeOpen, setRangeOpen] = react.useState(false);
 					const chartWrapRef = react.useRef(null);
 					const seenVersionRef = react.useRef(null);
-					const pendingRef = react.useRef(null);
+					const requestSeqRef = react.useRef(0);
+					const rangeRef = react.useRef(null);
 
-					const refresh = react.useCallback(async () => {
+					// 关闭 range 下拉（点击外部时）
+					react.useEffect(function () {
+						if (!rangeOpen) return;
+						function handleClick(e) {
+							if (rangeRef.current && !rangeRef.current.contains(e.target)) setRangeOpen(false);
+						}
+						document.addEventListener("mousedown", handleClick);
+						return function () { document.removeEventListener("mousedown", handleClick); };
+					}, [rangeOpen]);
+
+					// 刷新：race-safe，latest selection wins
+					const refresh = react.useCallback(async function (hoursOverride) {
 						if (!face || typeof face.fetchDashboard !== "function") return;
-						if (pendingRef.current) return;
+						const hours = typeof hoursOverride === "number" ? hoursOverride : selectedHours;
+						const seq = ++requestSeqRef.current;
 						setLoading(true);
-						pendingRef.current = true;
 						try {
-							const value = await face.fetchDashboard(sessionId);
+							const value = await face.fetchDashboard(sessionId, { hours: hours });
+							if (seq !== requestSeqRef.current) return; // stale response, discard
 							if (value && value.ok) { setDashboard(value); setError(null); }
 						} catch (e) {
+							if (seq !== requestSeqRef.current) return;
 							if (e) setError(e.message ?? "fetch failed");
 						} finally {
-							pendingRef.current = null;
-							setLoading(false);
+							if (seq === requestSeqRef.current) setLoading(false);
 						}
-					}, [face, sessionId]);
+					}, [face, sessionId, selectedHours]);
 
-					react.useEffect(() => {
+					// fingerprint 变化时：保留当前 selectedHours
+					react.useEffect(function () {
 						if (!nodesVersion) return;
 						if (seenVersionRef.current === null) {
 							seenVersionRef.current = nodesVersion;
@@ -637,11 +667,19 @@ window.__ModuleLoader__.load({
 						}
 					}, [nodesVersion, visible, refresh, onAutoOpen]);
 
-					react.useEffect(() => {
+					react.useEffect(function () {
 						if (visible && !dashboard && !loading) refresh();
 					}, [visible, dashboard, loading, refresh]);
 
-					const openDetail = react.useCallback(async (id) => {
+					// 切换时间范围：立即刷新
+					function selectHours(h) {
+						setSelectedHours(h);
+						setRangeOpen(false);
+						setChartHover(null);
+						refresh(h);
+					}
+
+					const openDetail = react.useCallback(async function (id) {
 						if (!face || typeof face.readEvent !== "function") return;
 						setDetailId(id);
 						setDetailLoading(true);
@@ -655,7 +693,7 @@ window.__ModuleLoader__.load({
 						}
 					}, [face, sessionId]);
 
-					const closeDetail = react.useCallback(() => {
+					const closeDetail = react.useCallback(function () {
 						setDetailId(null);
 						setDetail(null);
 					}, []);
@@ -682,16 +720,18 @@ window.__ModuleLoader__.load({
 							typeof face?.setDraft === "function" ? (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								style: { border: "none", background: "none", cursor: "pointer", font: "inherit", fontSize: "11px", color: "var(--dsw-alias-state-business-primary, #818cf8)", padding: "4px 8px", marginTop: "4px" },
-								onClick: () => face.setDraft("记录一下："),
+								onClick: function () { face.setDraft("记录一下："); },
 								children: "＋ Record",
 							}) : null,
 						] });
 					}
 
-					const chart = buildChartPaths(dashboard.series, 300, 160);
-					const normGap = dashboard.normalizedGap;
-					const lastTime = dashboard.today.lastEventTime;
-					const lastClock = lastTime ? localClock(lastTime) : null;
+					// 从 dashboard metadata 构建 timeWindow
+					var timeWindow = makeTimeWindow(dashboard.hours, dashboard.generatedAt);
+					var chart = buildChartPaths(dashboard.series, 300, 160, timeWindow);
+					var normGap = dashboard.normalizedGap;
+					var lastTime = dashboard.today.lastEventTime;
+					var lastClock = lastTime ? localClock(lastTime) : null;
 
 					return (0, react_jsx_runtime.jsxs)(react.Fragment, { children: [
 						// ── Header ──
@@ -704,32 +744,29 @@ window.__ModuleLoader__.load({
 									(0, react_jsx_runtime.jsx)("button", {
 										type: "button",
 										style: refreshHover ? { ...S.refreshBtn, ...S.refreshBtnHover } : S.refreshBtn,
-										onClick: refresh,
-										onMouseEnter: () => setRefreshHover(true),
-										onMouseLeave: () => setRefreshHover(false),
+										onClick: function () { refresh(); },
+										onMouseEnter: function () { setRefreshHover(true); },
+										onMouseLeave: function () { setRefreshHover(false); },
 										children: loading ? "…" : "↻",
 									}),
 								] }),
 							] }),
-							// ── Hero: MEL / RRI ──
 							(0, react_jsx_runtime.jsx)(HeroMetrics, { today: dashboard.today }),
-							// ── Gap ──
 							normGap !== null ? (0, react_jsx_runtime.jsxs)("div", { style: S.gapStrip, children: [
 								(0, react_jsx_runtime.jsx)("span", { style: S.gapLabel, children: "GAP" }),
 								(0, react_jsx_runtime.jsx)("span", { style: S.gapValue, children: signed(normGap) }),
 								(0, react_jsx_runtime.jsx)("span", { style: S.gapDirection, children: gapDirectionText(normGap) }),
 							] }) : null,
 						] }),
-						// ── Secondary: ROI / ARCTIC / TSA ──
 						(0, react_jsx_runtime.jsx)(SecondaryRail, { today: dashboard.today }),
 						// ── Chart ──
-						dashboard.series.length > 0 ? (0, react_jsx_runtime.jsxs)("div", {
+						(0, react_jsx_runtime.jsxs)("div", {
 							style: S.chartWrap,
 							ref: chartWrapRef,
 							children: [
 								(0, react_jsx_runtime.jsxs)("div", { style: S.chartHeader, children: [
-									(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px" }, children: [
-										(0, react_jsx_runtime.jsx)("span", { style: S.chartRange, children: `Last ${dashboard.hours}h` }),
+									(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }, children: [
+										(0, react_jsx_runtime.jsxs)("span", { style: S.chartRange, children: ["Last ", selectedHours, "h", dashboard.seriesTruncated ? " · " + dashboard.seriesReturned + " obs" : dashboard.series.length > 0 ? " · " + dashboard.series.length + " obs" : ""] }),
 										(0, react_jsx_runtime.jsxs)("div", { style: S.chartLegend, children: [
 											(0, react_jsx_runtime.jsxs)("span", { style: S.legendItem, children: [
 												(0, react_jsx_runtime.jsx)("span", { style: { ...S.legendDot, background: MEL_COLOR } }),
@@ -743,18 +780,46 @@ window.__ModuleLoader__.load({
 											] }),
 										] }),
 									] }),
+									// ── Range selector ──
+									(0, react_jsx_runtime.jsxs)("div", { style: S.rangeSelect, ref: rangeRef, children: [
+										(0, react_jsx_runtime.jsx)("button", {
+											type: "button",
+											style: rangeOpen ? { ...S.rangeButton, ...S.rangeButtonHover } : S.rangeButton,
+											onClick: function () { setRangeOpen(function (v) { return !v; }); },
+											children: formatHoursLabel(selectedHours) + " ▾",
+										}),
+										rangeOpen ? (0, react_jsx_runtime.jsx)("div", { style: S.rangeMenu, children: CHART_HOURS_OPTIONS.map(function (h) {
+											var isActive = h === selectedHours;
+											return (0, react_jsx_runtime.jsx)("button", {
+												type: "button",
+												style: isActive ? { ...S.rangeOption, ...S.rangeOptionActive } : S.rangeOption,
+												onClick: function () { selectHours(h); },
+												onMouseEnter: function (e) { if (!isActive) e.currentTarget.style.background = "var(--dsw-alias-interactive-bg-hover)"; },
+												onMouseLeave: function (e) { if (!isActive) e.currentTarget.style.background = "none"; },
+												children: formatHoursLabel(h),
+											}, h);
+										}) }) : null,
+									] }),
 								] }),
-								(0, react_jsx_runtime.jsx)(MelRriChart, {
-									chart: chart,
-									hoverIndex: chartHover ? chartHover.index : null,
-									onHover: setChartHover,
-									onLeave: () => setChartHover(null),
-								}),
-								chartHover ? (0, react_jsx_runtime.jsx)(ChartTooltip, { hover: chartHover, chart: chart, containerRef: chartWrapRef }) : null,
+								chart.empty ? (0, react_jsx_runtime.jsxs)("div", { children: [
+									(0, react_jsx_runtime.jsx)(MelRriChart, {
+										chart: chart,
+										hoverIndex: chartHover ? chartHover.index : null,
+										onHover: setChartHover,
+										onLeave: function () { setChartHover(null); },
+									}),
+									(0, react_jsx_runtime.jsx)("div", { style: { textAlign: "center", padding: "8px 0 0", fontSize: "10px", color: "var(--dsw-alias-label-caption)" }, children: "No observations in this window" }),
+								] }) : (0, react_jsx_runtime.jsxs)("div", { children: [
+									(0, react_jsx_runtime.jsx)(MelRriChart, {
+										chart: chart,
+										hoverIndex: chartHover ? chartHover.index : null,
+										onHover: setChartHover,
+										onLeave: function () { setChartHover(null); },
+									}),
+									chartHover ? (0, react_jsx_runtime.jsx)(ChartTooltip, { hover: chartHover, chart: chart, containerRef: chartWrapRef }) : null,
+								] }),
 							],
-						}) : (0, react_jsx_runtime.jsx)("div", { style: S.chartWrap, children: (0, react_jsx_runtime.jsxs)("div", { style: S.chartEmpty, children: [
-							(0, react_jsx_runtime.jsx)("span", { style: S.chartEmptyText, children: "No chart data in this window." }),
-						] }) }),
+						}),
 						// ── Today Strip ──
 						(0, react_jsx_runtime.jsxs)("div", { style: S.todayStrip, children: [
 							(0, react_jsx_runtime.jsxs)("div", { style: S.todayLeft, children: [
@@ -763,7 +828,7 @@ window.__ModuleLoader__.load({
 									dashboard.today.count,
 									" event",
 									dashboard.today.count !== 1 ? "s" : "",
-									lastClock ? ` · last ${lastClock}` : "",
+									lastClock ? " · last " + lastClock : "",
 								] }),
 							] }),
 						] }),
@@ -849,7 +914,7 @@ window.__ModuleLoader__.load({
 					var hoverIndex = props.hoverIndex;
 					var onHover = props.onHover;
 					var onLeave = props.onLeave;
-					if (!chart || chart.empty) return null;
+					if (!chart) return null;
 
 					function handleMouseMove(e) {
 						if (!chart.hoverData || chart.hoverData.length === 0) return;
@@ -931,13 +996,12 @@ window.__ModuleLoader__.load({
 					var containerRect = containerRef.current ? containerRef.current.getBoundingClientRect() : null;
 					var left = containerRect ? hover.mouseX - containerRect.left + 12 : 0;
 					var top = containerRect ? hover.mouseY - containerRect.top - 10 : 0;
-					// 边界修正
 					if (containerRect && left > containerRect.width - 140) left = left - 152;
 					if (top < 0) top = 8;
 					return (0, react_jsx_runtime.jsxs)("div", {
 						style: { ...S.tooltip, left: left + "px", top: top + "px" },
 						children: [
-							(0, react_jsx_runtime.jsx)("div", { style: S.tooltipTime, children: d.time ? localClock(d.time) : "" }),
+							(0, react_jsx_runtime.jsx)("div", { style: S.tooltipTime, children: d.time ? localTimeFull(d.time) : "" }),
 							d.mel != null ? (0, react_jsx_runtime.jsxs)("div", { style: S.tooltipRow, children: [
 								(0, react_jsx_runtime.jsx)("span", { style: S.tooltipLabel, children: "MEL" }),
 								(0, react_jsx_runtime.jsxs)("span", { style: S.tooltipVal, children: [d.mel, " → ", d.normalizedMel] }),
@@ -1312,7 +1376,7 @@ window.__ModuleLoader__.load({
 						body: JSON.stringify({
 							sessionId,
 							tzOffsetMinutes: new Date().getTimezoneOffset(),
-							hours: options?.hours ?? 24,
+							hours: options?.hours ?? DEFAULT_CHART_HOURS,
 							recentLimit: options?.recentLimit ?? 8,
 						}),
 					});
@@ -1366,11 +1430,18 @@ window.__ModuleLoader__.load({
 					gapDirectionText,
 					melBand,
 					rriBand,
+					CHART_HOURS_OPTIONS,
+					DEFAULT_CHART_HOURS,
+					formatHoursLabel,
+					makeTimeWindow,
 					resultTextOfBlocks,
 					buildChartPaths,
+					generateWindowTicks: typeof generateWindowTicks === "function" ? generateWindowTicks : null,
+					scaleTimeX: typeof scaleTimeX === "function" ? scaleTimeX : null,
 					linePath: typeof polylinePath === "function" ? polylinePath : null,
 					chartGeometry: typeof buildChartPaths === "function" ? buildChartPaths : null,
 					localClock,
+					localTimeFull,
 					sidebarBus,
 					sessionStore,
 					IntrospectSlot,
