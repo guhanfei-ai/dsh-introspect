@@ -221,24 +221,28 @@
 			}
 
 			exports.apply = apply;
-			exports.inject = inject;
-			exports.internals = Object.freeze({
-				conversationNodesOf,
-				introspectFingerprint,
-				latestRecordedId,
-				normalizeTo100,
-				formatMinutes,
-				signed,
-				trimForList,
-				resultTextOfBlocks,
-				buildChartPaths,
-				linePath: typeof polylinePath === "function" ? polylinePath : null,
-				chartGeometry: typeof buildChartPaths === "function" ? buildChartPaths : null,
-				localClock,
-				sidebarBus,
-				sessionStore,
-				IntrospectSlot,
-				IntrospectWorkspace,
-				S,
-				INTROSPECT_TOOLS,
-			});
+				exports.inject = inject;
+				exports.internals = Object.freeze({
+					conversationNodesOf,
+					introspectFingerprint,
+					latestRecordedId,
+					normalizeTo100,
+					formatMinutes,
+					signed,
+					trimForList,
+					normalizedGap,
+					gapDirectionText,
+					melBand,
+					rriBand,
+					resultTextOfBlocks,
+					buildChartPaths,
+					linePath: typeof polylinePath === "function" ? polylinePath : null,
+					chartGeometry: typeof buildChartPaths === "function" ? buildChartPaths : null,
+					localClock,
+					sidebarBus,
+					sessionStore,
+					IntrospectSlot,
+					IntrospectWorkspace,
+					S,
+					INTROSPECT_TOOLS,
+				});

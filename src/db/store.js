@@ -217,12 +217,25 @@ export function recentEvents(db, limit = 20) {
 }
 
 /**
+ * 窗口内某列最近一个非空值（lastNonNull 语义）。
+ * 每个指标独立取——记录一条只含 RRI 的事件不应让 MEL 消失。
+ * whereExtra 应以 "WHERE" 或 "... AND" 结尾（由 buildFilter 生成）。
+ */
+function lastNonNullMetric(db, column, whereExtra, args) {
+  const row = db.prepare(
+    `SELECT ${column} AS v, event_time AS t FROM events ${whereExtra} ${column} IS NOT NULL ORDER BY event_time DESC, id DESC LIMIT 1`,
+  ).get(...args)
+  return row ? { value: Number(row.v), time: row.t } : null
+}
+
+/**
  * 窗口聚合。每个指标按自己的语义聚合（见 docs/METRICS.md）：
- * MEL/RRI 取 latest + avg，ROI/ARCTIC 取当日累计，TSA 取 SUM。
- * 趋势 = 窗口内最新一条与上一条 MEL 之差（跨全库取前一条，不受窗口截断）。
+ * MEL/RRI 取 lastNonNull + avg，ROI/ARCTIC 取当日累计，TSA 取 SUM。
+ * 趋势 = 最近两个 non-null MEL 之差。
  */
 export function aggregateWindow(db, options = {}) {
   const { clause, args } = buildFilter(options)
+  const whereExtra = clause ? `${clause} AND` : 'WHERE'
   const row = db.prepare(`
     SELECT
       COUNT(*)                       AS n,
@@ -238,19 +251,31 @@ export function aggregateWindow(db, options = {}) {
       COUNT(tsa_minutes)             AS tsa_seen
     FROM events ${clause}`).get(...args)
   const count = Number(row?.n ?? 0)
-  const latest = count > 0 ? queryEvents(db, { ...options, limit: 1, sort: 'time_desc' })[0] : null
-  const previous = latest ? priorEvent(db, latest) : null
+  const melLnn = lastNonNullMetric(db, 'mel', whereExtra, args)
+  const rriLnn = lastNonNullMetric(db, 'rri', whereExtra, args)
+  const roiLnn = lastNonNullMetric(db, 'roi', whereExtra, args)
+  const arcticLnn = lastNonNullMetric(db, 'arctic', whereExtra, args)
+  const tsaLnn = lastNonNullMetric(db, 'tsa_minutes', whereExtra, args)
+  // MEL 趋势：窗口内最近两个 non-null MEL 之差
+  const melTwo = db.prepare(
+    `SELECT mel FROM events ${clause ? `${clause} AND` : 'WHERE'} mel IS NOT NULL ORDER BY event_time DESC, id DESC LIMIT 2`,
+  ).all(...args)
+  const melLatest = melTwo.length >= 1 ? Number(melTwo[0].mel) : null
+  const melPrevious = melTwo.length >= 2 ? Number(melTwo[1].mel) : null
   return {
     count,
-    mel: latest ? latest.mel : null,
-    melPrevious: previous ? previous.mel : null,
+    mel: melLnn ? melLnn.value : null,
+    melPrevious: melPrevious,
     melAvg: round(row?.mel_avg),
-    rri: latest ? latest.rri : null,
+    rri: rriLnn ? rriLnn.value : null,
     rriAvg: round(row?.rri_avg),
     roi: round(row?.roi_sum),
     roiAvg: round(row?.roi_avg),
     arctic: round(row?.arctic_sum),
     tsaMinutes: round(row?.tsa_sum),
+    tsaLatest: tsaLnn ? tsaLnn.value : null,
+    arcticLatest: arcticLnn ? arcticLnn.value : null,
+    roiLatest: roiLnn ? roiLnn.value : null,
     lastEventTime: row?.last_time ?? null,
   }
 }

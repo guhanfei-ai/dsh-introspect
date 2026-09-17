@@ -98,10 +98,42 @@
 			}
 
 			/** 码位安全的有界截断（附省略号）。 */
-			function trimForList(text, limit) {
-				const chars = [...String(text ?? "")];
-				const cap = typeof limit === "number" && limit > 0 ? limit : 120;
-				if (chars.length <= cap) return String(text ?? "");
-				return `${chars.slice(0, cap - 1).join("")}…`;
-			}
+				function trimForList(text, limit) {
+					const chars = [...String(text ?? "")];
+					const cap = typeof limit === "number" && limit > 0 ? limit : 120;
+					if (chars.length <= cap) return String(text ?? "");
+					return `${chars.slice(0, cap - 1).join("")}…`;
+				}
+
+				/** Normalized Energy-Reality Gap: MEL/2 - RRI，同轴语义一致。 */
+				function normalizedGap(mel, rri) {
+					if (typeof mel !== "number" || typeof rri !== "number") return null;
+					return Math.round((mel / 2 - rri) * 100) / 100;
+				}
+
+				/** Gap 方向文字（克制、无判断）。 */
+				function gapDirectionText(gap) {
+					if (typeof gap !== "number" || !Number.isFinite(gap)) return "";
+					if (Math.abs(gap) < 1) return "aligned";
+					return gap > 0 ? "energy ahead" : "reality ahead";
+				}
+
+				/** 客户端 MEL 区间查找（与 src/metrics.js MEL_BANDS 一致）。 */
+				function melBand(value) {
+					if (typeof value !== "number" || !Number.isFinite(value)) return null;
+					if (value < 60) return { key: "low", label: "low energy" };
+					if (value < 80) return { key: "normal", label: "balanced" };
+					if (value < 100) return { key: "high", label: "creative" };
+					return { key: "over", label: "over-limit" };
+				}
+
+				/** 客户端 RRI 区间查找（与 src/metrics.js RRI_BANDS 一致）。 */
+				function rriBand(value) {
+					if (typeof value !== "number" || !Number.isFinite(value)) return null;
+					if (value <= 20) return { key: "very_low", label: "very low" };
+					if (value <= 40) return { key: "low", label: "low" };
+					if (value <= 60) return { key: "medium", label: "medium" };
+					if (value <= 80) return { key: "high", label: "high" };
+					return { key: "very_high", label: "very high" };
+				}
 			//#endregion

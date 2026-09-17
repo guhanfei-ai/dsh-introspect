@@ -49,14 +49,14 @@ describe('today aggregation', () => {
     const today = buildToday(db, { nowMs: NOON, tzOffsetMinutes: TZ })
     assert.equal(today.date, '05-03')
     assert.equal(today.count, 2)
-    assert.equal(today.mel, null, '最新一条没有 MEL 就不能假装有')
-    assert.equal(today.melPrevious, 92)
-    assert.equal(today.rri, null)
+    assert.equal(today.mel, 92, 'lastNonNull: 最新一条没有 MEL，取上一条的 92')
+    assert.equal(today.melPrevious, null, '窗口内只有一个 non-null MEL，无前驱')
+    assert.equal(today.rri, 87, 'lastNonNull: 最新一条没有 RRI，取上一条的 87')
     assert.equal(today.roi, 12.4)
     assert.equal(today.arctic, 2)
     assert.equal(today.tsaMinutes, 65)
     assert.equal(today.tsaText, '1h05m')
-    assert.equal(today.gap, null)
+    assert.equal(today.gap, 5, 'gap = 92 - 87 = 5')
   })
 
   it('moves the boundary with the timezone instead of the server clock', () => {
@@ -161,13 +161,13 @@ describe('status text', () => {
   it('is compact, factual and bounded', () => {
     const text = statusText(db, { nowMs: NOON, tzOffsetMinutes: TZ, hours: 24 })
     assert.match(text, /^TODAY\n/)
-    // 当天最新一条没有打分，MEL/RRI 就显示为 -，不是 0
-    assert.match(text, /MEL\s+-\s+band -\s+trend flat/)
-    assert.match(text, /RRI\s+-\s+avg 87/, '今日唯一有 RRI 的一条就是平均值')
+    // lastNonNull：最新一条没有 MEL，取上一条的 92；窗口内只有一个 non-null MEL，trend flat
+    assert.match(text, /MEL\s+92\s+band creative\s+trend flat/)
+    assert.match(text, /RRI\s+87\s+avg 87/, 'lastNonNull 取上一条的 87')
     assert.match(text, /ROI\s+\+12\.4/)
     assert.match(text, /TSA\s+1h05m/)
     assert.match(text, /Events\s+2 today \/ 5 total/)
-    assert.match(text, /Gap\s+-\s+\(energy - reality, raw units\)/)
+    assert.match(text, /Gap\s+\+5\s+\(energy - reality, raw units\)/)
     assert.ok(text.split('\n').length <= 14)
     assert.ok(Buffer.byteLength(text) < 700)
     assert.doesNotMatch(text, /good|bad|should|failed|success/i)

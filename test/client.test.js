@@ -131,21 +131,22 @@ test('localClock returns HH:mm in the browser timezone', () => {
   assert.equal(localClock(null), '')
 })
 
-test('buildChartPaths generates two plottable lines with ticks and a current-dot', () => {
+test('buildChartPaths generates two plottable lines with time ticks and a current-dot', () => {
   const series = [
     { time: '2026-05-01T01:00:00Z', mel: 96, rri: 12, summary: 'A' },
     { time: '2026-05-01T02:00:00Z', mel: 60, rri: 90, summary: 'B' },
     { time: '2026-05-01T03:00:00Z', mel: 92, rri: null, summary: 'C' },
   ]
-  const chart = buildChartPaths(series, 300, 120)
+  const chart = buildChartPaths(series, 300, 160)
   assert.equal(chart.empty, false)
   assert.match(chart.mel.path, /^M/)
   assert.match(chart.rri.path, /^M/)
-  assert.ok(chart.ticks.length >= 2)
+  assert.ok(chart.xTicks.length >= 2, 'should have time axis ticks')
+  assert.ok(chart.yGrid.length >= 2, 'should have Y axis grid')
   assert.ok(chart.current.length >= 1)
-  assert.equal(chart.legend.length, 2)
-  assert.match(chart.viewBox, /0 0 300 120/)
-  const empty = buildChartPaths([], 300, 120)
+  assert.ok(chart.hoverData.length === 3, 'hover data for each point')
+  assert.match(chart.viewBox, /0 0 300 160/)
+  const empty = buildChartPaths([], 300, 160)
   assert.equal(empty.empty, true)
   const dimmed = buildChartPaths(series, 0, 0)
   assert.equal(dimmed.empty, false)

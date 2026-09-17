@@ -60,7 +60,7 @@ RRI deliberately does not evaluate "was this worthwhile" — only "did the real 
 
 **Question:** What did this exchange return to me, relative to what it cost?
 
-**Range:** unbounded (positive = net personal gain, near zero = wash, negative = cost exceeded return), nullable.
+**Range:** practically bounded ±1,000,000 for storage / validation safety (positive = net personal gain, near zero = wash, negative = cost exceeded return), nullable.
 
 **Unit:** personal utility points (元-equivalent). Not money. Not a financial instrument.
 

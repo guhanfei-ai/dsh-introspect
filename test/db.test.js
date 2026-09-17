@@ -280,11 +280,14 @@ describe('aggregation semantics', () => {
     check.close()
   })
 
-  it('finds the trend predecessor across the whole timeline, not just the window', () => {
+  it('finds the trend predecessor within the window (lastNonNull)', () => {
     const check = seeded()
     const onlyLatest = aggregateWindow(check, { from: '2026-05-01T03:00:00Z', to: '2026-05-01T05:00:00Z' })
     assert.equal(onlyLatest.count, 1)
-    assert.equal(onlyLatest.melPrevious, 92)
+    assert.equal(onlyLatest.melPrevious, null, '窗口内只有一个 non-null MEL，没有前驱')
+    const wider = aggregateWindow(check, { from: '2026-05-01T00:00:00Z', to: '2026-05-02T00:00:00Z' })
+    assert.equal(wider.mel, 96, 'lastNonNull MEL = 96')
+    assert.equal(wider.melPrevious, 92, '前驱 non-null MEL = 92')
     check.close()
   })
 

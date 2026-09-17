@@ -37,7 +37,9 @@ export function buildSeries(db, { hours = 24, limit = 60, nowMs = Date.now() }) 
   const window = hours * 3_600_000
   const from = new Date(nowMs - window).toISOString()
   const to = new Date(nowMs + 60_000).toISOString()
-  const rows = queryEvents(db, { from, to, limit, sort: 'time_asc' })
+  // 先取最新 N 条（time_desc），再反转为时间升序——绝不把最新数据截掉。
+  const latest = queryEvents(db, { from, to, limit, sort: 'time_desc' })
+  const rows = latest.reverse()
   return rows.map((event) => ({
     id: event.id,
     time: event.eventTime,
@@ -64,8 +66,19 @@ export function buildToday(db, { nowMs = Date.now(), tzOffsetMinutes }) {
     melTrend: trend,
     melDirection: trend === null ? 'flat' : trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat',
     gap: energyRealityGap(aggregate.mel, aggregate.rri),
+    normalizedGap: normalizedGap(aggregate.mel, aggregate.rri),
     tsaText: formatMinutes(aggregate.tsaMinutes) ?? '0m',
   }
+}
+
+/**
+ * Normalized Energy-Reality Gap：MEL/2 − RRI。
+ * 两个维度量纲不同（MEL 可到 200，RRI 封顶 100），
+ * 归一化后同轴比较，语义才与图表一致。
+ */
+export function normalizedGap(mel, rri) {
+  if (typeof mel !== 'number' || typeof rri !== 'number') return null
+  return Math.round((mel / 2 - rri) * 100) / 100
 }
 
 /** 面板一屏所需的全部数据：状态 + 曲线 + Recent + 标签 + 象限。 */
@@ -81,6 +94,7 @@ export function buildDashboard(db, options = {}) {
   const windowStart = new Date(nowMs - hours * 3_600_000).toISOString()
   const windowEnd = new Date(nowMs + 60_000).toISOString()
   const windowOptions = { from: windowStart, to: windowEnd }
+  const windowAgg = aggregateWindow(db, windowOptions)
   return {
     ok: true,
     op: 'dashboard',
@@ -88,7 +102,9 @@ export function buildDashboard(db, options = {}) {
     hours,
     totals: totalEvents(db),
     today,
-    window: aggregateWindow(db, windowOptions),
+    window: windowAgg,
+    normalizedGap: normalizedGap(today.mel, today.rri),
+    windowNormalizedGap: normalizedGap(windowAgg.mel, windowAgg.rri),
     series: buildSeries(db, { hours, limit: seriesLimit, nowMs }),
     recent: recentEvents(db, recentLimit).map(listView),
     tags: tagCounts(db, { ...windowOptions, limit: 6 }),

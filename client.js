@@ -121,493 +121,890 @@ window.__ModuleLoader__.load({
 			}
 
 			/** 码位安全的有界截断（附省略号）。 */
-			function trimForList(text, limit) {
-				const chars = [...String(text ?? "")];
-				const cap = typeof limit === "number" && limit > 0 ? limit : 120;
-				if (chars.length <= cap) return String(text ?? "");
-				return `${chars.slice(0, cap - 1).join("")}…`;
-			}
+				function trimForList(text, limit) {
+					const chars = [...String(text ?? "")];
+					const cap = typeof limit === "number" && limit > 0 ? limit : 120;
+					if (chars.length <= cap) return String(text ?? "");
+					return `${chars.slice(0, cap - 1).join("")}…`;
+				}
+
+				/** Normalized Energy-Reality Gap: MEL/2 - RRI，同轴语义一致。 */
+				function normalizedGap(mel, rri) {
+					if (typeof mel !== "number" || typeof rri !== "number") return null;
+					return Math.round((mel / 2 - rri) * 100) / 100;
+				}
+
+				/** Gap 方向文字（克制、无判断）。 */
+				function gapDirectionText(gap) {
+					if (typeof gap !== "number" || !Number.isFinite(gap)) return "";
+					if (Math.abs(gap) < 1) return "aligned";
+					return gap > 0 ? "energy ahead" : "reality ahead";
+				}
+
+				/** 客户端 MEL 区间查找（与 src/metrics.js MEL_BANDS 一致）。 */
+				function melBand(value) {
+					if (typeof value !== "number" || !Number.isFinite(value)) return null;
+					if (value < 60) return { key: "low", label: "low energy" };
+					if (value < 80) return { key: "normal", label: "balanced" };
+					if (value < 100) return { key: "high", label: "creative" };
+					return { key: "over", label: "over-limit" };
+				}
+
+				/** 客户端 RRI 区间查找（与 src/metrics.js RRI_BANDS 一致）。 */
+				function rriBand(value) {
+					if (typeof value !== "number" || !Number.isFinite(value)) return null;
+					if (value <= 20) return { key: "very_low", label: "very low" };
+					if (value <= 40) return { key: "low", label: "low" };
+					if (value <= 60) return { key: "medium", label: "medium" };
+					if (value <= 80) return { key: "high", label: "high" };
+					return { key: "very_high", label: "very high" };
+				}
 			//#endregion
 
-			//#region MEL × RRI 纯 SVG 图表（零依赖、响应式、主题跟随）
-			const CHART_PAD = { top: 8, right: 4, bottom: 20, left: 4 };
-			const CHART_DEFAULTS = { width: 300, height: 120 };
-			const MEL_COLOR = "var(--dsw-alias-state-business-primary, #6366f1)";
-			const RRI_COLOR = "var(--dsw-alias-state-success-primary, #14b8a6)";
-			const GAP_COLOR = "var(--dsw-alias-state-business-primary, #6366f1)";
-			const TICK_COLOR = "var(--dsw-alias-label-tertiary, #9ca3af)";
-			const MEL_MAX = 200;
-			const RRI_MAX = 100;
+				//#region MEL × RRI 纯 SVG 图表 — observability-grade time series
+				const CHART_PAD = { top: 12, right: 12, bottom: 26, left: 32 };
+				const CHART_DEFAULTS = { width: 300, height: 160 };
+				const MEL_COLOR = "var(--dsw-alias-state-business-primary, #818cf8)";
+				const RRI_COLOR = "var(--dsw-alias-state-success-primary, #34d399)";
+				const GAP_FILL = "var(--dsw-alias-state-business-primary, #818cf8)";
+				const TICK_COLOR = "var(--dsw-alias-label-caption, #6b7280)";
+				const GRID_COLOR = "var(--dsw-alias-border-l2, rgba(255,255,255,0.06))";
+				const CROSSHAIR_COLOR = "var(--dsw-alias-label-caption, #6b7280)";
+				const MEL_MAX = 200;
+				const RRI_MAX = 100;
 
-			function plotArea(width, height) {
-				const left = CHART_PAD.left;
-				const top = CHART_PAD.top;
-				const w = Math.max(1, width - CHART_PAD.left - CHART_PAD.right);
-				const h = Math.max(1, height - CHART_PAD.top - CHART_PAD.bottom);
-				return { left, top, w, h };
-			}
-
-			function scaleX(index, count, area) {
-				if (count <= 1) return area.left + area.w * 0.5;
-				return area.left + (index / (count - 1)) * area.w;
-			}
-
-			function scaleY(value100, area) {
-				if (value100 == null || !Number.isFinite(value100)) return null;
-				return area.top + area.h - Math.max(0, Math.min(100, value100)) * area.h / 100;
-			}
-
-			function polylinePath(points) {
-				if (points.length === 0) return "";
-				let d = "";
-				for (let i = 0; i < points.length; i++) {
-					const p = points[i];
-					if (p.y == null) continue;
-					d += (d === "" ? "M" : "L") + p.x.toFixed(1) + " " + p.y.toFixed(1);
+				function plotArea(width, height) {
+					const left = CHART_PAD.left;
+					const top = CHART_PAD.top;
+					const w = Math.max(1, width - CHART_PAD.left - CHART_PAD.right);
+					const h = Math.max(1, height - CHART_PAD.top - CHART_PAD.bottom);
+					return { left, top, w, h };
 				}
-				return d;
-			}
 
-			function tickLabels(series) {
-				const times = series.map((p) => p.time).filter(Boolean);
-				if (times.length === 0) return [];
-				const picks = [0];
-				if (times.length >= 4) {
-					picks.push(Math.floor(times.length * 0.33));
-					picks.push(Math.floor(times.length * 0.66));
+				function scaleX(index, count, area) {
+					if (count <= 1) return area.left + area.w * 0.5;
+					return area.left + (index / (count - 1)) * area.w;
 				}
-				if (times.length >= 2) picks.push(times.length - 1);
-				return [...new Set(picks)].filter((i) => i < times.length).sort((a, b) => a - b).map((i) => ({
-					index: i,
-					label: localClock(times[i]),
-				}));
-			}
 
-			function lastNonNull(series, key) {
-				for (let i = series.length - 1; i >= 0; i--) {
-					const value = series[i][key];
-					if (typeof value === "number" && Number.isFinite(value)) return { index: i, value };
+				function scaleY(value100, area) {
+					if (value100 == null || !Number.isFinite(value100)) return null;
+					return area.top + area.h - Math.max(0, Math.min(100, value100)) * area.h / 100;
 				}
-				return null;
-			}
 
-			/**
-			 * 纯函数：从时间序列数据算出整个 SVG 的几何信息。
-			 * 面板 React 组件拿到返回值后只负责渲染 JSX，不做任何计算。
-			 */
-			function buildChartPaths(series, width, height) {
-				const w = typeof width === "number" && width > 0 ? width : CHART_DEFAULTS.width;
-				const h = typeof height === "number" && height > 0 ? height : CHART_DEFAULTS.height;
-				const area = plotArea(w, h);
-				if (!Array.isArray(series) || series.length === 0) {
-					return { viewBox: `0 0 ${w} ${h}`, width: w, height: h, empty: true, mel: null, rri: null, gap: null, ticks: [], legend: [], current: [] };
+				function polylinePath(points) {
+					if (points.length === 0) return "";
+					let d = "";
+					for (let i = 0; i < points.length; i++) {
+						const p = points[i];
+						if (p.y == null) continue;
+						d += (d === "" ? "M" : "L") + p.x.toFixed(1) + " " + p.y.toFixed(1);
+					}
+					return d;
 				}
-				const n = series.length;
-				const coords = series.map((point, i) => ({
-					x: scaleX(i, n, area),
-					melY: scaleY(normalizeTo100(point.mel, MEL_MAX), area),
-					rriY: scaleY(normalizeTo100(point.rri, RRI_MAX), area),
-					mel: point.mel,
-					rri: point.rri,
-					time: point.time,
-					summary: point.summary ?? "",
-				}));
-				const melPath = polylinePath(coords.map((c) => ({ x: c.x, y: c.melY })));
-				const rriPath = polylinePath(coords.map((c) => ({ x: c.x, y: c.rriY })));
-				let gapPath = "";
-				if (coords.length >= 2) {
-					let lastBothKnown = false;
-					let segStart = -1;
-					for (let i = 0; i < coords.length; i++) {
-						const both = coords[i].melY != null && coords[i].rriY != null;
-						if (both && !lastBothKnown) segStart = i;
-						if (!both && lastBothKnown && segStart >= 0) {
-							gapPath += buildGapSegment(coords, segStart, i);
-							segStart = -1;
+
+				function buildGapSegment(coords, from, to) {
+					const upper = [];
+					const lower = [];
+					for (let i = from; i < to; i++) {
+						if (coords[i].melY == null || coords[i].rriY == null) continue;
+						upper.push({ x: coords[i].x, y: coords[i].melY });
+						lower.push({ x: coords[i].x, y: coords[i].rriY });
+					}
+					if (upper.length < 2) return "";
+					let d = `M${upper[0].x.toFixed(1)} ${upper[0].y.toFixed(1)}`;
+					for (let i = 1; i < upper.length; i++) d += `L${upper[i].x.toFixed(1)} ${upper[i].y.toFixed(1)}`;
+					for (let i = lower.length - 1; i >= 0; i--) d += `L${lower[i].x.toFixed(1)} ${lower[i].y.toFixed(1)}`;
+					return d + "Z";
+				}
+
+				function lastNonNull(series, key) {
+					for (let i = series.length - 1; i >= 0; i--) {
+						const value = series[i][key];
+						if (typeof value === "number" && Number.isFinite(value)) return { index: i, value };
+					}
+					return null;
+				}
+
+				//#region 时间轴刻度生成
+				/** ISO → Date ms，容错。 */
+				function timeMs(iso) {
+					if (!iso) return NaN;
+					const ms = new Date(String(iso)).getTime();
+					return Number.isFinite(ms) ? ms : NaN;
+				}
+
+				/** HH:mm 格式。 */
+				function fmtHHmm(ms) {
+					const d = new Date(ms);
+					return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+				}
+
+				/** MM-DD 格式。 */
+				function fmtMMdd(ms) {
+					const d = new Date(ms);
+					return String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+				}
+
+				/** MM-DD HH:mm 格式。 */
+				function fmtFull(ms) {
+					return fmtMMdd(ms) + " " + fmtHHmm(ms);
+				}
+
+				/** 对齐到整 N 分钟。 */
+				function snapMinute(ms, step) {
+					return Math.floor(ms / (step * 60000)) * (step * 60000);
+				}
+
+				/** 对齐到整小时。 */
+				function snapHour(ms) {
+					return Math.floor(ms / 3600000) * 3600000;
+				}
+
+				/** 对齐到本地午夜。 */
+				function snapDay(ms) {
+					const d = new Date(ms);
+					d.setHours(0, 0, 0, 0);
+					return d.getTime();
+				}
+
+				/**
+				 * 根据时间范围生成合理的时间轴刻度。
+				 * 返回 [{ms, label}, ...]，保证2-5个刻度，不超出数据范围。
+				 */
+				function generateTimeTicks(series) {
+					const times = [];
+					for (const p of series) {
+						const ms = timeMs(p.time);
+						if (Number.isFinite(ms)) times.push(ms);
+					}
+					if (times.length === 0) return [];
+					const lo = times[0];
+					const hi = times[times.length - 1];
+					const span = hi - lo;
+					if (span <= 0) return [{ ms: lo, label: fmtHHmm(lo) }];
+					const HOUR = 3600000;
+					const DAY = 86400000;
+					const result = [];
+					if (span <= 10 * 60000) {
+						// <10min: 每2分钟一个刻度
+						let t = snapMinute(lo, 2);
+						for (; t <= hi + 60000; t += 2 * 60000) {
+							if (t >= lo - 60000) result.push({ ms: t, label: fmtHHmm(t) });
 						}
-						lastBothKnown = both;
-					}
-					if (lastBothKnown && segStart >= 0) gapPath += buildGapSegment(coords, segStart, coords.length);
-				}
-				const ticks = tickLabels(series);
-				const ticksScaled = ticks.map((t) => ({ ...t, x: scaleX(t.index, n, area).toFixed(1) }));
-				const melLast = lastNonNull(series, "mel");
-				const rriLast = lastNonNull(series, "rri");
-				const current = [];
-				if (melLast) current.push({ label: "MEL", value: melLast.value, x: scaleX(melLast.index, n, area), y: scaleY(normalizeTo100(melLast.value, MEL_MAX), area), color: MEL_COLOR });
-				if (rriLast) current.push({ label: "RRI", value: rriLast.value, x: scaleX(rriLast.index, n, area), y: scaleY(normalizeTo100(rriLast.value, RRI_MAX), area), color: RRI_COLOR });
-				return {
-					viewBox: `0 0 ${w} ${h}`,
-					width: w,
-					height: h,
-					empty: false,
-					mel: melPath ? { path: melPath, color: MEL_COLOR, label: "MEL", last: melLast?.value ?? null } : null,
-					rri: rriPath ? { path: rriPath, color: RRI_COLOR, label: "RRI", last: rriLast?.value ?? null } : null,
-					gap: gapPath ? { path: gapPath } : null,
-					ticks: ticksScaled,
-					legend: [
-						{ label: "MEL", color: MEL_COLOR, value: melLast?.value ?? null },
-						{ label: "RRI", color: RRI_COLOR, value: rriLast?.value ?? null },
-					],
-					current,
-				};
-			}
-
-			function buildGapSegment(coords, from, to) {
-				const upper = [];
-				const lower = [];
-				for (let i = from; i < to; i++) {
-					if (coords[i].melY == null || coords[i].rriY == null) continue;
-					upper.push({ x: coords[i].x, y: coords[i].melY });
-					lower.push({ x: coords[i].x, y: coords[i].rriY });
-				}
-				if (upper.length < 2) return "";
-				let d = `M${upper[0].x.toFixed(1)} ${upper[0].y.toFixed(1)}`;
-				for (let i = 1; i < upper.length; i++) d += `L${upper[i].x.toFixed(1)} ${upper[i].y.toFixed(1)}`;
-				for (let i = lower.length - 1; i >= 0; i--) d += `L${lower[i].x.toFixed(1)} ${lower[i].y.toFixed(1)}`;
-				return d + "Z";
-			}
-
-			/** 从时钟文字取本地时区 HH:mm（客户端用浏览器 Intl 即可，不依赖 host 时区）。 */
-			function localClock(iso) {
-				try {
-					const d = new Date(String(iso));
-					if (Number.isNaN(d.getTime())) return "";
-					const hh = String(d.getHours()).padStart(2, "0");
-					const mm = String(d.getMinutes()).padStart(2, "0");
-					return `${hh}:${mm}`;
-				} catch {
-					return "";
-				}
-			}
-			//#endregion
-
-			//#region 主题样式（全部跟随宿主 --dsw-alias-* 变量，亮/暗自动）
-			const S = {
-				mButton: { display: "inline-flex", alignItems: "center", gap: "4px", padding: "0 8px", height: "22px", background: "var(--dsw-alias-fill-tsp-secondary)", color: "var(--dsw-alias-label-secondary)", border: "none", borderRadius: "6px", cursor: "pointer", font: "inherit", fontSize: "12px", whiteSpace: "nowrap" },
-				panelHost: { position: "fixed", top: 0, right: 0, bottom: 0, left: 0, pointerEvents: "none", zIndex: 40 },
-				overlayRoot: { position: "absolute", top: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", background: "var(--dsw-alias-bg-base)", color: "var(--dsw-alias-label-primary)", fontSize: "13px", minWidth: 0, borderLeft: "1px solid var(--dsw-alias-border-l2)", boxShadow: "-8px 0 24px rgba(16,24,40,0.10)", pointerEvents: "auto" },
-				overlayHandle: { position: "absolute", left: -4, top: 0, bottom: 0, width: 8, cursor: "col-resize", zIndex: 1 },
-				header: { padding: "10px 14px", borderBottom: "1px solid var(--dsw-alias-border-l2)", flex: "none", display: "flex", flexDirection: "column", gap: "8px" },
-				headerTitle: { fontSize: "13px", fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--dsw-alias-label-secondary)", margin: "0 0 2px 0" },
-				metricsGrid: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px 12px", fontSize: "12px", lineHeight: 1.4, minWidth: 0 },
-				metricCell: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },
-				metricLabel: { color: "var(--dsw-alias-label-tertiary)", fontSize: "10px", letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
-				metricValue: { fontWeight: 600, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" },
-				metricSub: { color: "var(--dsw-alias-label-tertiary)", fontSize: "10px", whiteSpace: "nowrap" },
-				gapRow: { display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)", marginTop: "2px" },
-				chartWrap: { padding: "10px 14px", borderBottom: "1px solid var(--dsw-alias-border-l2)", flex: "none" },
-				chartHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)" },
-				chartLegend: { display: "flex", gap: "10px", fontSize: "11px" },
-				legendItem: { display: "inline-flex", alignItems: "center", gap: "4px" },
-				legendDot: { width: "8px", height: "8px", borderRadius: "50%", flex: "none" },
-				legendLabel: { color: "var(--dsw-alias-label-secondary)", fontVariantNumeric: "tabular-nums" },
-				chartSvg: { display: "block", width: "100%", height: "auto" },
-				recentWrap: { flex: "1 1 auto", minHeight: 0, overflow: "auto", padding: "8px 0" },
-				recentHeader: { padding: "0 14px 6px", fontSize: "11px", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--dsw-alias-label-tertiary)" },
-				recentItem: { padding: "6px 14px", cursor: "pointer", transition: "background 0.08s ease", borderBottom: "1px solid var(--dsw-alias-border-l2)" },
-				recentItemHover: { background: "var(--dsw-alias-interactive-bg-hover)" },
-				recentTop: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "8px" },
-				recentTime: { flex: "none", fontSize: "11px", fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-tertiary)" },
-				recentSummary: { flex: "1 1 auto", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 500 },
-				recentMetrics: { display: "flex", gap: "8px", fontSize: "10px", color: "var(--dsw-alias-label-tertiary)", marginTop: "2px", fontVariantNumeric: "tabular-nums" },
-				recentMetricChip: { whiteSpace: "nowrap" },
-				detailWrap: { padding: "14px", display: "flex", flexDirection: "column", gap: "8px" },
-				detailBack: { border: "none", background: "none", cursor: "pointer", font: "inherit", fontSize: "12px", color: "var(--dsw-alias-state-business-primary)", padding: "0", marginBottom: "4px" },
-				detailSummary: { fontSize: "14px", fontWeight: 600, lineHeight: 1.4, margin: "0" },
-				detailRaw: { fontSize: "12px", lineHeight: 1.6, color: "var(--dsw-alias-label-secondary)", margin: "0", padding: "8px 10px", background: "var(--dsw-alias-fill-tsp-secondary)", borderRadius: "8px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
-				detailRow: { display: "flex", justifyContent: "space-between", fontSize: "12px", gap: "8px", minHeight: "22px" },
-				detailLabel: { color: "var(--dsw-alias-label-tertiary)", flex: "none" },
-				detailValue: { fontWeight: 500, textAlign: "right", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-				detailReason: { fontSize: "11px", lineHeight: 1.5, color: "var(--dsw-alias-label-tertiary)", margin: "2px 0 0", padding: "6px 10px", background: "var(--dsw-alias-fill-tsp-secondary)", borderRadius: "6px" },
-				detailTags: { display: "flex", flexWrap: "wrap", gap: "4px" },
-				detailTag: { fontSize: "10px", padding: "2px 8px", borderRadius: "6px", background: "var(--dsw-alias-fill-tsp-secondary)", color: "var(--dsw-alias-label-secondary)" },
-				emptyWrap: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", height: "100%", padding: "32px 16px", textAlign: "center" },
-				emptyIcon: { fontSize: "28px", lineHeight: 1, opacity: 0.5 },
-				emptyTitle: { fontSize: "14px", fontWeight: 600, color: "var(--dsw-alias-label-primary)", margin: "0" },
-				emptyHint: { fontSize: "12px", color: "var(--dsw-alias-label-tertiary)", margin: "0", lineHeight: 1.5 },
-				loadingWrap: { display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--dsw-alias-label-tertiary)", fontSize: "13px" },
-				refreshBtn: { border: "none", background: "none", cursor: "pointer", font: "inherit", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)", padding: "2px 6px", borderRadius: "4px", lineHeight: 1 },
-				refreshBtnHover: { color: "var(--dsw-alias-label-primary)", background: "var(--dsw-alias-interactive-bg-hover)" },
-				footer: { padding: "6px 14px", borderTop: "1px solid var(--dsw-alias-border-l2)", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "10px", color: "var(--dsw-alias-label-caption)", flex: "none" },
-			};
-			//#endregion
-
-			//#region IntrospectWorkspace（壳无关面板组件：slot-agnostic，sidebar/standalone 共用）
-			/**
-			 * 主面板组件：五指标、MEL × RRI 曲线、Recent Events、事件详情。
-			 * 面板数据全部来自 face.fetchDashboard()，工具结果的 introspectFingerprint
-			 * 每次变化就重新拉一次（零通道、无轮询）。
-			 *
-			 * props：
-			 *   sessionId        会话 id
-			 *   introspectFace   { fetchDashboard, readEvent, setDraft, revokeApproval }
-			 *   nodesVersion     introspectFingerprint 返回值，变化=有新事件，触发 refetch
-			 *   visible          boolean（面板是否可见；不可见时仍挂载，但跳过拉取）
-			 *   onAutoOpen       新事件到达且面板收起时，父级据此拉起面板
-			 *   headerHeight     面板头部对齐高度（standalone 壳传入，sidebar 壳传 null）
-			 *   variant          "standalone" | "sidebar"
-			 */
-			function IntrospectWorkspace(props) {
-				const { sessionId, introspectFace: face, nodesVersion, visible, onAutoOpen, headerHeight, variant } = props;
-				const [dashboard, setDashboard] = react.useState(null);
-				const [loading, setLoading] = react.useState(false);
-				const [error, setError] = react.useState(null);
-				const [detailId, setDetailId] = react.useState(null);
-				const [detail, setDetail] = react.useState(null);
-				const [detailLoading, setDetailLoading] = react.useState(false);
-				const [hovered, setHovered] = react.useState(null);
-				const seenVersionRef = react.useRef(null);
-				const pendingRef = react.useRef(null);
-
-				// 拉取面板数据：有新 fingerprint 就重新拉。
-				const refresh = react.useCallback(async () => {
-					if (!face || typeof face.fetchDashboard !== "function") return;
-					if (pendingRef.current) return;
-					setLoading(true);
-					pendingRef.current = true;
-					try {
-						const value = await face.fetchDashboard(sessionId);
-						if (value && value.ok) {
-							setDashboard(value);
-							setError(null);
+					} else if (span <= HOUR) {
+						// <1h: 每5/10/15分钟一个刻度
+						const step = span <= 20 * 60000 ? 5 : span <= 40 * 60000 ? 10 : 15;
+						let t = snapMinute(lo, step);
+						for (; t <= hi + 60000; t += step * 60000) {
+							if (t >= lo - 60000) result.push({ ms: t, label: fmtHHmm(t) });
 						}
-					} catch (e) {
-						if (e) setError(e.message ?? "fetch failed");
-					} finally {
-						pendingRef.current = null;
-						setLoading(false);
+					} else if (span <= 6 * HOUR) {
+						// <6h: 每30分钟或每小时
+						const stepMin = span <= 3 * HOUR ? 30 : 60;
+						let t = snapMinute(lo, stepMin);
+						for (; t <= hi + 60000; t += stepMin * 60000) {
+							if (t >= lo - 60000) result.push({ ms: t, label: fmtHHmm(t) });
+						}
+					} else if (span <= 24 * HOUR) {
+						// <24h: 每2小时或3小时
+						const stepH = span <= 12 * HOUR ? 2 : 3;
+						let t = snapHour(lo);
+						for (; t <= hi + 60000; t += stepH * HOUR) {
+							if (t >= lo - HOUR) result.push({ ms: t, label: fmtHHmm(t) });
+						}
+					} else if (span <= 3 * DAY) {
+						// <3天: 每天午夜 + 当前天的中午
+						let t = snapDay(lo);
+						for (; t <= hi + DAY; t += DAY) {
+							if (t >= lo - DAY) {
+								const d = new Date(t);
+								const label = d.getDate() === new Date(lo).getDate() && d.getMonth() === new Date(lo).getMonth()
+									? fmtHHmm(t) : fmtMMdd(t);
+								result.push({ ms: t, label });
+							}
+						}
+					} else {
+						// >3天: 每天一个日期刻度
+						let t = snapDay(lo);
+						for (; t <= hi + DAY; t += DAY) {
+							if (t >= lo - DAY) result.push({ ms: t, label: fmtMMdd(t) });
+						}
 					}
-				}, [face, sessionId]);
-
-				// fingerprint 变化时：如果面板可见，立即刷新；如果不可见，让父级
-				// 拉起面板（新事件到达时应该看到它）。第一次只记基线，不弹窗。
-				react.useEffect(() => {
-					if (!nodesVersion) return;
-					if (seenVersionRef.current === null) {
-						seenVersionRef.current = nodesVersion;
-						if (visible) refresh();
-						return;
+					// 首尾保底
+					if (result.length === 0) {
+						result.push({ ms: lo, label: fmtHHmm(lo) });
+						if (span > 0) result.push({ ms: hi, label: fmtHHmm(hi) });
+					} else {
+						// 确保第一个刻度不晚于数据起点
+						if (result[0].ms > lo + span * 0.15) {
+							result.unshift({ ms: lo, label: fmtHHmm(lo) });
+						}
+						// 确保最后一个刻度不早于数据终点
+						if (result[result.length - 1].ms < hi - span * 0.15) {
+							result.push({ ms: hi, label: fmtHHmm(hi) });
+						}
 					}
-					if (nodesVersion !== seenVersionRef.current) {
-						seenVersionRef.current = nodesVersion;
-						if (visible) refresh();
-						else if (typeof onAutoOpen === "function") onAutoOpen();
+					return result;
+				}
+
+				/** 将时间刻度映射到图表 x 坐标。 */
+				function mapTimeTicksToX(ticks, series, area) {
+					if (ticks.length === 0 || series.length === 0) return [];
+					const times = series.map((p) => timeMs(p.time));
+					const lo = times[0];
+					const hi = times[times.length - 1];
+					const span = hi - lo;
+					return ticks.map((tick) => {
+						const ratio = span > 0 ? (tick.ms - lo) / span : 0.5;
+						const x = area.left + Math.max(0, Math.min(1, ratio)) * area.w;
+						return { ...tick, x: x.toFixed(1) };
+					});
+				}
+				//#endregion
+
+				/**
+				 * 纯函数：从时间序列数据算出整个 SVG 的几何信息。
+				 * 返回值交给 React 组件做纯渲染，不做任何计算。
+				 *
+				 * 新增：
+				 * - 使用 normalized MEL/2 绘图（与 RRI 同 0-100 轴）
+				 * - 时间轴刻度基于真实时间映射
+				 * - Y 轴网格线
+				 * - hoverData 用于 crosshair/tooltip
+				 * - sparse data 优雅处理
+				 */
+				function buildChartPaths(series, width, height) {
+					const w = typeof width === "number" && width > 0 ? width : CHART_DEFAULTS.width;
+					const h = typeof height === "number" && height > 0 ? height : CHART_DEFAULTS.height;
+					const area = plotArea(w, h);
+					if (!Array.isArray(series) || series.length === 0) {
+						return { viewBox: `0 0 ${w} ${h}`, width: w, height: h, empty: true, mel: null, rri: null, gap: null, xTicks: [], yGrid: [], current: [], hoverData: null };
 					}
-				}, [nodesVersion, visible, refresh, onAutoOpen]);
+					const n = series.length;
+					// 归一化：MEL / 2 → 0-100，RRI → 0-100
+					const coords = series.map((point, i) => ({
+						x: scaleX(i, n, area),
+						melY: scaleY(normalizeTo100(point.mel != null ? point.mel / 2 : null, MEL_MAX / 2), area),
+						rriY: scaleY(normalizeTo100(point.rri, RRI_MAX), area),
+						mel: point.mel,
+						rri: point.rri,
+						time: point.time,
+						summary: point.summary ?? "",
+					}));
+					const melPath = polylinePath(coords.map((c) => ({ x: c.x, y: c.melY })));
+					const rriPath = polylinePath(coords.map((c) => ({ x: c.x, y: c.rriY })));
+					// Gap area: normalized MEL/2 vs RRI
+					let gapPath = "";
+					if (coords.length >= 2) {
+						let lastBothKnown = false;
+						let segStart = -1;
+						for (let i = 0; i < coords.length; i++) {
+							const both = coords[i].melY != null && coords[i].rriY != null;
+							if (both && !lastBothKnown) segStart = i;
+							if (!both && lastBothKnown && segStart >= 0) {
+								gapPath += buildGapSegment(coords, segStart, i);
+								segStart = -1;
+							}
+							lastBothKnown = both;
+						}
+						if (lastBothKnown && segStart >= 0) gapPath += buildGapSegment(coords, segStart, coords.length);
+					}
+					// 时间轴刻度：基于真实时间映射
+					const rawTicks = generateTimeTicks(series);
+					const xTicks = mapTimeTicksToX(rawTicks, series, area);
+					// Y 轴网格：0, 50, 100
+					const yGrid = [0, 50, 100].map((v) => ({
+						value: v,
+						y: scaleY(v, area).toFixed(1),
+						label: String(v),
+					}));
+					// 当前值端点
+					const melLast = lastNonNull(series, "mel");
+					const rriLast = lastNonNull(series, "rri");
+					const current = [];
+					if (melLast) current.push({
+						label: "MEL", value: melLast.value,
+						normalized: Math.round(melLast.value / 2),
+						x: scaleX(melLast.index, n, area), y: scaleY(normalizeTo100(melLast.value / 2, MEL_MAX / 2), area),
+						color: MEL_COLOR,
+					});
+					if (rriLast) current.push({
+						label: "RRI", value: rriLast.value,
+						normalized: rriLast.value,
+						x: scaleX(rriLast.index, n, area), y: scaleY(normalizeTo100(rriLast.value, RRI_MAX), area),
+						color: RRI_COLOR,
+					});
+					// hover 数据：每个点的完整信息
+					const hoverData = coords.map((c, i) => ({
+						index: i,
+						x: c.x,
+						melY: c.melY,
+						rriY: c.rriY,
+						mel: c.mel,
+						rri: c.rri,
+						normalizedMel: c.mel != null ? Math.round(c.mel / 2) : null,
+						gap: (typeof c.mel === "number" && typeof c.rri === "number") ? Math.round((c.mel / 2 - c.rri) * 100) / 100 : null,
+						time: c.time,
+						summary: c.summary,
+					}));
+					return {
+						viewBox: `0 0 ${w} ${h}`,
+						width: w,
+						height: h,
+						empty: false,
+						mel: melPath ? { path: melPath, color: MEL_COLOR, label: "MEL", last: melLast?.value ?? null } : null,
+						rri: rriPath ? { path: rriPath, color: RRI_COLOR, label: "RRI", last: rriLast?.value ?? null } : null,
+						gap: gapPath ? { path: gapPath } : null,
+						xTicks,
+						yGrid,
+						current,
+						hoverData,
+					};
+				}
 
-				// 面板变可见时：第一次或有错误就拉一次。
-				react.useEffect(() => {
-					if (visible && !dashboard && !loading) refresh();
-				}, [visible, dashboard, loading, refresh]);
-
-				// 事件详情：点 recent 事件后按 id 拉取。
-				const openDetail = react.useCallback(async (id) => {
-					if (!face || typeof face.readEvent !== "function") return;
-					setDetailId(id);
-					setDetailLoading(true);
+				/** 从时钟文字取本地时区 HH:mm（客户端用浏览器 Intl 即可）。 */
+				function localClock(iso) {
 					try {
-						const event = await face.readEvent(sessionId, id);
-						setDetail(event);
+						const d = new Date(String(iso));
+						if (Number.isNaN(d.getTime())) return "";
+						const hh = String(d.getHours()).padStart(2, "0");
+						const mm = String(d.getMinutes()).padStart(2, "0");
+						return `${hh}:${mm}`;
 					} catch {
-						setDetail(null);
-					} finally {
-						setDetailLoading(false);
+						return "";
 					}
-				}, [face, sessionId]);
+				}
+				//#endregion
 
-				const closeDetail = react.useCallback(() => {
-					setDetailId(null);
-					setDetail(null);
-				}, []);
+				//#region 主题样式 — observability console aesthetic
+				// Spacing scale: 4 · 8 · 12 · 16 · 20 · 24
+				// Typography: system-ui, tabular-nums for all numeric displays
+				// Colors: follow host --dsw-alias-* variables, dark-mode native
+				const S = {
+					// ── Header ──
+					header: { padding: "16px 16px 12px", borderBottom: "1px solid var(--dsw-alias-border-l2)", flex: "none", display: "flex", flexDirection: "column", gap: "12px" },
+					headerTitle: { fontSize: "11px", fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--dsw-alias-label-tertiary)", margin: "0", display: "flex", alignItems: "center", gap: "8px" },
+					headerSubtitle: { fontSize: "10px", color: "var(--dsw-alias-label-caption)", letterSpacing: "0.02em" },
+					liveDot: { width: "6px", height: "6px", borderRadius: "50%", background: "var(--dsw-alias-state-success-primary, #10b981)", flex: "none", opacity: 0.7 },
+					refreshBtn: { border: "none", background: "none", cursor: "pointer", font: "inherit", fontSize: "10px", color: "var(--dsw-alias-label-caption)", padding: "2px 4px", borderRadius: "3px", lineHeight: 1, marginLeft: "auto" },
+					refreshBtnHover: { color: "var(--dsw-alias-label-secondary)" },
 
-				if (detailId !== null) {
-					return (0, react_jsx_runtime.jsx)(DetailPanel, {
-						detail: detail,
-						loading: detailLoading,
-						onBack: closeDetail,
-						variant,
+					// ── Hero Metrics (MEL / RRI) ──
+					heroRow: { display: "flex", gap: "4px", alignItems: "stretch" },
+					heroCell: { flex: "1 1 0", display: "flex", flexDirection: "column", alignItems: "center", gap: "2px", padding: "8px 0", borderRadius: "6px", background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.03))" },
+					heroLabel: { fontSize: "10px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--dsw-alias-label-tertiary)" },
+					heroValue: { fontSize: "28px", fontWeight: 300, lineHeight: 1, fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-primary)", letterSpacing: "-0.02em" },
+					heroValueNull: { fontSize: "28px", fontWeight: 300, lineHeight: 1, color: "var(--dsw-alias-label-caption)", letterSpacing: "-0.02em" },
+					heroBand: { fontSize: "10px", color: "var(--dsw-alias-label-caption)", letterSpacing: "0.02em" },
+
+					// ── Gap Strip ──
+					gapStrip: { display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", padding: "6px 0", fontSize: "11px" },
+					gapLabel: { color: "var(--dsw-alias-label-caption)", letterSpacing: "0.02em" },
+					gapValue: { fontWeight: 600, fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-secondary)" },
+					gapDirection: { fontSize: "10px", color: "var(--dsw-alias-label-caption)" },
+
+					// ── Secondary Metrics (ROI / ARCTIC / TSA) ──
+					secondaryRail: { display: "flex", gap: "1px", borderTop: "1px solid var(--dsw-alias-border-l2)", borderBottom: "1px solid var(--dsw-alias-border-l2)", flex: "none" },
+					secondaryCell: { flex: "1 1 0", display: "flex", flexDirection: "column", alignItems: "center", gap: "1px", padding: "8px 4px", background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.02))" },
+					secondaryLabel: { fontSize: "9px", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--dsw-alias-label-caption)" },
+					secondaryValue: { fontSize: "14px", fontWeight: 500, fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-secondary)" },
+					secondaryValueNull: { fontSize: "14px", fontWeight: 400, color: "var(--dsw-alias-label-caption)" },
+					secondaryHint: { fontSize: "9px", color: "var(--dsw-alias-label-caption)" },
+
+					// ── Chart Section ──
+					chartWrap: { padding: "12px 16px", borderBottom: "1px solid var(--dsw-alias-border-l2)", flex: "none", position: "relative" },
+					chartHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary)" },
+					chartRange: { fontSize: "10px", color: "var(--dsw-alias-label-caption)", letterSpacing: "0.02em" },
+					chartLegend: { display: "flex", gap: "12px", fontSize: "11px" },
+					legendItem: { display: "inline-flex", alignItems: "center", gap: "5px" },
+					legendDot: { width: "7px", height: "7px", borderRadius: "50%", flex: "none" },
+					legendLabel: { color: "var(--dsw-alias-label-tertiary)", fontSize: "10px", letterSpacing: "0.02em" },
+					legendValue: { color: "var(--dsw-alias-label-secondary)", fontVariantNumeric: "tabular-nums", fontWeight: 500, fontSize: "11px" },
+					chartSvg: { display: "block", width: "100%", height: "auto", cursor: "crosshair" },
+					chartEmpty: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "4px", padding: "24px 16px", textAlign: "center" },
+					chartEmptyText: { fontSize: "11px", color: "var(--dsw-alias-label-caption)" },
+
+					// ── Tooltip (floating, positioned by JS) ──
+					tooltip: { position: "absolute", pointerEvents: "none", background: "var(--dsw-alias-bg-elevated, rgba(20,20,28,0.95))", border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "6px", padding: "8px 10px", fontSize: "10px", lineHeight: 1.5, zIndex: 10, minWidth: "120px", boxShadow: "0 4px 12px rgba(0,0,0,0.3)", fontVariantNumeric: "tabular-nums", transition: "opacity 0.1s ease" },
+					tooltipTime: { fontSize: "11px", fontWeight: 600, color: "var(--dsw-alias-label-primary)", marginBottom: "4px", letterSpacing: "0.01em" },
+					tooltipRow: { display: "flex", justifyContent: "space-between", gap: "12px", color: "var(--dsw-alias-label-secondary)" },
+					tooltipLabel: { color: "var(--dsw-alias-label-tertiary)" },
+					tooltipVal: { fontWeight: 500 },
+					tooltipDivider: { height: "1px", background: "var(--dsw-alias-border-l2)", margin: "4px 0" },
+
+					// ── Today Strip ──
+					todayStrip: { padding: "8px 16px", borderBottom: "1px solid var(--dsw-alias-border-l2)", flex: "none", display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "11px" },
+					todayLeft: { display: "flex", alignItems: "center", gap: "8px" },
+					todayLabel: { fontSize: "10px", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--dsw-alias-label-caption)" },
+					todayInfo: { fontSize: "11px", color: "var(--dsw-alias-label-tertiary)", fontVariantNumeric: "tabular-nums" },
+
+					// ── Recent Timeline ──
+					recentWrap: { flex: "1 1 auto", minHeight: 0, overflow: "auto", padding: "0" },
+					recentHeader: { padding: "10px 16px 6px", fontSize: "10px", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--dsw-alias-label-caption)", position: "sticky", top: 0, background: "var(--dsw-alias-bg-base)", zIndex: 1 },
+					recentDayGroup: { padding: "0 0 0" },
+					recentDayLabel: { padding: "6px 16px 2px", fontSize: "9px", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--dsw-alias-label-caption)" },
+					recentItem: { padding: "8px 16px", cursor: "pointer", transition: "background 0.08s ease", borderTop: "1px solid var(--dsw-alias-border-l2)" },
+					recentItemHover: { background: "var(--dsw-alias-interactive-bg-hover)" },
+					recentTime: { fontSize: "10px", fontVariantNumeric: "tabular-nums", color: "var(--dsw-alias-label-caption)", marginBottom: "2px", letterSpacing: "0.01em" },
+					recentSummary: { fontSize: "12px", lineHeight: 1.45, fontWeight: 400, color: "var(--dsw-alias-label-primary)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" },
+					recentChips: { display: "flex", gap: "8px", marginTop: "4px", flexWrap: "wrap" },
+					chip: { fontSize: "10px", padding: "1px 6px", borderRadius: "3px", fontVariantNumeric: "tabular-nums", letterSpacing: "0.01em" },
+					chipMel: { background: "color-mix(in srgb, var(--dsw-alias-state-business-primary, #6366f1) 15%, transparent)", color: "var(--dsw-alias-state-business-primary, #818cf8)" },
+					chipRri: { background: "color-mix(in srgb, var(--dsw-alias-state-success-primary, #10b981) 15%, transparent)", color: "var(--dsw-alias-state-success-primary, #34d399)" },
+					chipRoi: { background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.05))", color: "var(--dsw-alias-label-tertiary)" },
+					chipTsa: { background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.05))", color: "var(--dsw-alias-label-tertiary)" },
+
+					// ── Detail Panel ──
+					detailWrap: { padding: "16px", display: "flex", flexDirection: "column", gap: "12px" },
+					detailBack: { border: "none", background: "none", cursor: "pointer", font: "inherit", fontSize: "11px", color: "var(--dsw-alias-state-business-primary, #818cf8)", padding: "0", letterSpacing: "0.01em" },
+					detailSummary: { fontSize: "14px", fontWeight: 500, lineHeight: 1.4, margin: "0", color: "var(--dsw-alias-label-primary)" },
+					detailRaw: { fontSize: "11px", lineHeight: 1.6, color: "var(--dsw-alias-label-secondary)", margin: "0", padding: "10px 12px", background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.03))", borderRadius: "6px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
+					detailRow: { display: "flex", justifyContent: "space-between", fontSize: "12px", gap: "8px", minHeight: "20px" },
+					detailLabel: { color: "var(--dsw-alias-label-tertiary)", flex: "none", fontSize: "10px", letterSpacing: "0.04em", textTransform: "uppercase" },
+					detailValue: { fontWeight: 500, textAlign: "right", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" },
+					detailReason: { fontSize: "11px", lineHeight: 1.5, color: "var(--dsw-alias-label-tertiary)", margin: "2px 0 0", padding: "6px 10px", background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.03))", borderRadius: "4px" },
+					detailTags: { display: "flex", flexWrap: "wrap", gap: "4px" },
+					detailTag: { fontSize: "10px", padding: "2px 8px", borderRadius: "4px", background: "var(--dsw-alias-fill-tsp-secondary, rgba(255,255,255,0.05))", color: "var(--dsw-alias-label-secondary)" },
+
+					// ── Empty / Loading States ──
+					emptyWrap: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px", height: "100%", padding: "40px 24px", textAlign: "center" },
+					emptyTitle: { fontSize: "13px", fontWeight: 500, color: "var(--dsw-alias-label-secondary)", margin: "0" },
+					emptyHint: { fontSize: "11px", color: "var(--dsw-alias-label-caption)", margin: "0", lineHeight: 1.5 },
+					loadingWrap: { display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--dsw-alias-label-caption)", fontSize: "12px" },
+
+					// ── Footer ──
+					footer: { padding: "8px 16px", borderTop: "1px solid var(--dsw-alias-border-l2)", display: "flex", alignItems: "center", gap: "6px", fontSize: "10px", color: "var(--dsw-alias-label-caption)", flex: "none" },
+					footerDot: { width: "4px", height: "4px", borderRadius: "50%", background: "var(--dsw-alias-label-caption)", opacity: 0.5, flex: "none" },
+
+					// ── Slot Button (header action) ──
+					mButton: { display: "inline-flex", alignItems: "center", gap: "4px", padding: "0 8px", height: "22px", background: "var(--dsw-alias-fill-tsp-secondary)", color: "var(--dsw-alias-label-secondary)", border: "none", borderRadius: "6px", cursor: "pointer", font: "inherit", fontSize: "12px", whiteSpace: "nowrap" },
+
+					// ── Panel Shell (standalone mode) ──
+					panelHost: { position: "fixed", top: 0, right: 0, bottom: 0, left: 0, pointerEvents: "none", zIndex: 40 },
+					overlayRoot: { position: "absolute", top: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", background: "var(--dsw-alias-bg-base)", color: "var(--dsw-alias-label-primary)", fontSize: "13px", minWidth: 0, borderLeft: "1px solid var(--dsw-alias-border-l2)", boxShadow: "-8px 0 24px rgba(16,24,40,0.10)", pointerEvents: "auto" },
+					overlayHandle: { position: "absolute", left: -4, top: 0, bottom: 0, width: 8, cursor: "col-resize", zIndex: 1 },
+				};
+				//#endregion
+
+				//#region IntrospectWorkspace — Personal Observability Console
+				/**
+				 * 主面板组件：Hero metrics、Energy-Reality chart、Timeline。
+				 * 面板数据全部来自 face.fetchDashboard()，工具结果的 introspectFingerprint
+				 * 每次变化就重新拉一次（零通道、无轮询）。
+				 */
+				function IntrospectWorkspace(props) {
+					const { sessionId, introspectFace: face, nodesVersion, visible, onAutoOpen, headerHeight, variant } = props;
+					const [dashboard, setDashboard] = react.useState(null);
+					const [loading, setLoading] = react.useState(false);
+					const [error, setError] = react.useState(null);
+					const [detailId, setDetailId] = react.useState(null);
+					const [detail, setDetail] = react.useState(null);
+					const [detailLoading, setDetailLoading] = react.useState(false);
+					const [hovered, setHovered] = react.useState(null);
+					const [chartHover, setChartHover] = react.useState(null);
+					const [refreshHover, setRefreshHover] = react.useState(false);
+					const chartWrapRef = react.useRef(null);
+					const seenVersionRef = react.useRef(null);
+					const pendingRef = react.useRef(null);
+
+					const refresh = react.useCallback(async () => {
+						if (!face || typeof face.fetchDashboard !== "function") return;
+						if (pendingRef.current) return;
+						setLoading(true);
+						pendingRef.current = true;
+						try {
+							const value = await face.fetchDashboard(sessionId);
+							if (value && value.ok) { setDashboard(value); setError(null); }
+						} catch (e) {
+							if (e) setError(e.message ?? "fetch failed");
+						} finally {
+							pendingRef.current = null;
+							setLoading(false);
+						}
+					}, [face, sessionId]);
+
+					react.useEffect(() => {
+						if (!nodesVersion) return;
+						if (seenVersionRef.current === null) {
+							seenVersionRef.current = nodesVersion;
+							if (visible) refresh();
+							return;
+						}
+						if (nodesVersion !== seenVersionRef.current) {
+							seenVersionRef.current = nodesVersion;
+							if (visible) refresh();
+							else if (typeof onAutoOpen === "function") onAutoOpen();
+						}
+					}, [nodesVersion, visible, refresh, onAutoOpen]);
+
+					react.useEffect(() => {
+						if (visible && !dashboard && !loading) refresh();
+					}, [visible, dashboard, loading, refresh]);
+
+					const openDetail = react.useCallback(async (id) => {
+						if (!face || typeof face.readEvent !== "function") return;
+						setDetailId(id);
+						setDetailLoading(true);
+						try {
+							const event = await face.readEvent(sessionId, id);
+							setDetail(event);
+						} catch {
+							setDetail(null);
+						} finally {
+							setDetailLoading(false);
+						}
+					}, [face, sessionId]);
+
+					const closeDetail = react.useCallback(() => {
+						setDetailId(null);
+						setDetail(null);
+					}, []);
+
+					if (detailId !== null) {
+						return (0, react_jsx_runtime.jsx)(DetailPanel, { detail: detail, loading: detailLoading, onBack: closeDetail, variant });
+					}
+
+					if (loading && !dashboard) {
+						return (0, react_jsx_runtime.jsx)("div", { style: S.loadingWrap, children: "Loading…" });
+					}
+
+					if (error && !dashboard) {
+						return (0, react_jsx_runtime.jsxs)("div", { style: S.emptyWrap, children: [
+							(0, react_jsx_runtime.jsx)("p", { style: S.emptyTitle, children: "Load failed" }),
+							(0, react_jsx_runtime.jsx)("p", { style: S.emptyHint, children: error }),
+						] });
+					}
+
+					if (!dashboard || dashboard.totals.count === 0) {
+						return (0, react_jsx_runtime.jsxs)("div", { style: S.emptyWrap, children: [
+							(0, react_jsx_runtime.jsx)("p", { style: S.emptyTitle, children: "No observations yet." }),
+							(0, react_jsx_runtime.jsx)("p", { style: S.emptyHint, children: "Record something worth observing." }),
+							typeof face?.setDraft === "function" ? (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								style: { border: "none", background: "none", cursor: "pointer", font: "inherit", fontSize: "11px", color: "var(--dsw-alias-state-business-primary, #818cf8)", padding: "4px 8px", marginTop: "4px" },
+								onClick: () => face.setDraft("记录一下："),
+								children: "＋ Record",
+							}) : null,
+						] });
+					}
+
+					const chart = buildChartPaths(dashboard.series, 300, 160);
+					const normGap = dashboard.normalizedGap;
+					const lastTime = dashboard.today.lastEventTime;
+					const lastClock = lastTime ? localClock(lastTime) : null;
+
+					return (0, react_jsx_runtime.jsxs)(react.Fragment, { children: [
+						// ── Header ──
+						(0, react_jsx_runtime.jsxs)("div", { style: S.header, children: [
+							(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px" }, children: [
+								(0, react_jsx_runtime.jsxs)("h3", { style: S.headerTitle, children: [
+									(0, react_jsx_runtime.jsx)("span", { style: S.liveDot }),
+									"INTROSPECT",
+									(0, react_jsx_runtime.jsx)("span", { style: S.headerSubtitle, children: "Self-observability" }),
+									(0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										style: refreshHover ? { ...S.refreshBtn, ...S.refreshBtnHover } : S.refreshBtn,
+										onClick: refresh,
+										onMouseEnter: () => setRefreshHover(true),
+										onMouseLeave: () => setRefreshHover(false),
+										children: loading ? "…" : "↻",
+									}),
+								] }),
+							] }),
+							// ── Hero: MEL / RRI ──
+							(0, react_jsx_runtime.jsx)(HeroMetrics, { today: dashboard.today }),
+							// ── Gap ──
+							normGap !== null ? (0, react_jsx_runtime.jsxs)("div", { style: S.gapStrip, children: [
+								(0, react_jsx_runtime.jsx)("span", { style: S.gapLabel, children: "GAP" }),
+								(0, react_jsx_runtime.jsx)("span", { style: S.gapValue, children: signed(normGap) }),
+								(0, react_jsx_runtime.jsx)("span", { style: S.gapDirection, children: gapDirectionText(normGap) }),
+							] }) : null,
+						] }),
+						// ── Secondary: ROI / ARCTIC / TSA ──
+						(0, react_jsx_runtime.jsx)(SecondaryRail, { today: dashboard.today }),
+						// ── Chart ──
+						dashboard.series.length > 0 ? (0, react_jsx_runtime.jsxs)("div", {
+							style: S.chartWrap,
+							ref: chartWrapRef,
+							children: [
+								(0, react_jsx_runtime.jsxs)("div", { style: S.chartHeader, children: [
+									(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: "8px" }, children: [
+										(0, react_jsx_runtime.jsx)("span", { style: S.chartRange, children: `Last ${dashboard.hours}h` }),
+										(0, react_jsx_runtime.jsxs)("div", { style: S.chartLegend, children: [
+											(0, react_jsx_runtime.jsxs)("span", { style: S.legendItem, children: [
+												(0, react_jsx_runtime.jsx)("span", { style: { ...S.legendDot, background: MEL_COLOR } }),
+												(0, react_jsx_runtime.jsx)("span", { style: S.legendLabel, children: "MEL" }),
+												chart.mel ? (0, react_jsx_runtime.jsx)("span", { style: S.legendValue, children: chart.mel.last ?? "—" }) : null,
+											] }),
+											(0, react_jsx_runtime.jsxs)("span", { style: S.legendItem, children: [
+												(0, react_jsx_runtime.jsx)("span", { style: { ...S.legendDot, background: RRI_COLOR } }),
+												(0, react_jsx_runtime.jsx)("span", { style: S.legendLabel, children: "RRI" }),
+												chart.rri ? (0, react_jsx_runtime.jsx)("span", { style: S.legendValue, children: chart.rri.last ?? "—" }) : null,
+											] }),
+										] }),
+									] }),
+								] }),
+								(0, react_jsx_runtime.jsx)(MelRriChart, {
+									chart: chart,
+									hoverIndex: chartHover ? chartHover.index : null,
+									onHover: setChartHover,
+									onLeave: () => setChartHover(null),
+								}),
+								chartHover ? (0, react_jsx_runtime.jsx)(ChartTooltip, { hover: chartHover, chart: chart, containerRef: chartWrapRef }) : null,
+							],
+						}) : (0, react_jsx_runtime.jsx)("div", { style: S.chartWrap, children: (0, react_jsx_runtime.jsxs)("div", { style: S.chartEmpty, children: [
+							(0, react_jsx_runtime.jsx)("span", { style: S.chartEmptyText, children: "No chart data in this window." }),
+						] }) }),
+						// ── Today Strip ──
+						(0, react_jsx_runtime.jsxs)("div", { style: S.todayStrip, children: [
+							(0, react_jsx_runtime.jsxs)("div", { style: S.todayLeft, children: [
+								(0, react_jsx_runtime.jsx)("span", { style: S.todayLabel, children: "TODAY" }),
+								(0, react_jsx_runtime.jsxs)("span", { style: S.todayInfo, children: [
+									dashboard.today.count,
+									" event",
+									dashboard.today.count !== 1 ? "s" : "",
+									lastClock ? ` · last ${lastClock}` : "",
+								] }),
+							] }),
+						] }),
+						// ── Recent Timeline ──
+						dashboard.recent.length > 0 ? (0, react_jsx_runtime.jsxs)("div", { style: S.recentWrap, children: [
+							(0, react_jsx_runtime.jsx)("div", { style: S.recentHeader, children: "RECENT" }),
+							dashboard.recent.map(function (event) {
+								return (0, react_jsx_runtime.jsxs)("div", {
+									style: hovered === event.id ? { ...S.recentItem, ...S.recentItemHover } : S.recentItem,
+									onMouseEnter: function () { setHovered(event.id); },
+									onMouseLeave: function () { setHovered(null); },
+									onClick: function () { openDetail(event.id); },
+									children: [
+										(0, react_jsx_runtime.jsx)("div", { style: S.recentTime, children: event.clock || event.stamp }),
+										(0, react_jsx_runtime.jsx)("div", { style: S.recentSummary, children: event.summary }),
+										(0, react_jsx_runtime.jsxs)("div", { style: S.recentChips, children: [
+											event.mel != null ? (0, react_jsx_runtime.jsxs)("span", { style: { ...S.chip, ...S.chipMel }, children: ["MEL ", event.mel] }) : null,
+											event.rri != null ? (0, react_jsx_runtime.jsxs)("span", { style: { ...S.chip, ...S.chipRri }, children: ["RRI ", event.rri] }) : null,
+											event.roi != null ? (0, react_jsx_runtime.jsxs)("span", { style: { ...S.chip, ...S.chipRoi }, children: [signed(event.roi, 1)] }) : null,
+											event.tsaMinutes != null ? (0, react_jsx_runtime.jsx)("span", { style: { ...S.chip, ...S.chipTsa }, children: formatMinutes(event.tsaMinutes) }) : null,
+										] }),
+									],
+								}, event.id);
+							}),
+						] }) : null,
+						// ── Footer ──
+						(0, react_jsx_runtime.jsxs)("div", { style: S.footer, children: [
+							(0, react_jsx_runtime.jsx)("span", { style: S.footerDot }),
+							(0, react_jsx_runtime.jsx)("span", { children: "Local SQLite" }),
+							(0, react_jsx_runtime.jsx)("span", { style: S.footerDot }),
+							(0, react_jsx_runtime.jsx)("span", { children: "No telemetry" }),
+						] }),
+					] });
+				}
+
+				/** Hero metrics: MEL / RRI 大字展示。 */
+				function HeroMetrics(props) {
+					var today = props.today;
+					var melBandKey = today.mel != null ? melBand(today.mel) : null;
+					var rriBandKey = today.rri != null ? rriBand(today.rri) : null;
+					var melDir = today.melDirection;
+					var melTrend = today.melTrend;
+					return (0, react_jsx_runtime.jsxs)("div", { style: S.heroRow, children: [
+						(0, react_jsx_runtime.jsxs)("div", { style: S.heroCell, children: [
+							(0, react_jsx_runtime.jsx)("span", { style: S.heroLabel, children: "MEL" }),
+							today.mel != null ? (0, react_jsx_runtime.jsx)("span", { style: S.heroValue, children: today.mel }) : (0, react_jsx_runtime.jsx)("span", { style: S.heroValueNull, children: "—" }),
+							(0, react_jsx_runtime.jsxs)("span", { style: S.heroBand, children: [
+								melBandKey ? melBandKey.label : "—",
+								melDir !== "flat" && melTrend !== null ? " " + (melDir === "up" ? "↑" : "↓") + " " + Math.abs(Math.round(melTrend)) : "",
+							] }),
+						] }),
+						(0, react_jsx_runtime.jsxs)("div", { style: S.heroCell, children: [
+							(0, react_jsx_runtime.jsx)("span", { style: S.heroLabel, children: "RRI" }),
+							today.rri != null ? (0, react_jsx_runtime.jsx)("span", { style: S.heroValue, children: today.rri }) : (0, react_jsx_runtime.jsx)("span", { style: S.heroValueNull, children: "—" }),
+							(0, react_jsx_runtime.jsxs)("span", { style: S.heroBand, children: [
+								rriBandKey ? rriBandKey.label : "—",
+								today.rriAvg != null ? " · avg " + today.rriAvg : "",
+							] }),
+						] }),
+					] });
+				}
+
+				/** 二级指标横条：ROI / ARCTIC / TSA。 */
+				function SecondaryRail(props) {
+					var today = props.today;
+					var cells = [
+						{ label: "ROI", value: today.roi != null ? signed(today.roi, 1) : null, hint: "today Σ" },
+						{ label: "ARCTIC", value: today.arctic != null ? signed(today.arctic) : null, hint: "direction" },
+						{ label: "TSA", value: today.tsaText, hint: today.count + " events" },
+					];
+					return (0, react_jsx_runtime.jsx)("div", { style: S.secondaryRail, children: cells.map(function (cell) {
+						return (0, react_jsx_runtime.jsxs)("div", { style: S.secondaryCell, children: [
+							(0, react_jsx_runtime.jsx)("span", { style: S.secondaryLabel, children: cell.label }),
+							cell.value != null ? (0, react_jsx_runtime.jsx)("span", { style: S.secondaryValue, children: cell.value }) : (0, react_jsx_runtime.jsx)("span", { style: S.secondaryValueNull, children: "—" }),
+							(0, react_jsx_runtime.jsx)("span", { style: S.secondaryHint, children: cell.hint }),
+						] }, cell.label);
+					}) });
+				}
+
+				/** MEL × RRI SVG 图表：带时间轴、网格、hover。 */
+				function MelRriChart(props) {
+					var chart = props.chart;
+					var hoverIndex = props.hoverIndex;
+					var onHover = props.onHover;
+					var onLeave = props.onLeave;
+					if (!chart || chart.empty) return null;
+
+					function handleMouseMove(e) {
+						if (!chart.hoverData || chart.hoverData.length === 0) return;
+						var svg = e.currentTarget;
+						var rect = svg.getBoundingClientRect();
+						var svgX = (e.clientX - rect.left) / rect.width * chart.width;
+						var best = null;
+						var bestDist = Infinity;
+						for (var i = 0; i < chart.hoverData.length; i++) {
+							var d = Math.abs(chart.hoverData[i].x - svgX);
+							if (d < bestDist) { bestDist = d; best = chart.hoverData[i]; }
+						}
+						if (best) {
+							onHover({ index: best.index, mouseX: e.clientX, mouseY: e.clientY, data: best });
+						}
+					}
+
+					return (0, react_jsx_runtime.jsxs)("svg", {
+						style: S.chartSvg,
+						viewBox: chart.viewBox,
+						preserveAspectRatio: "xMidYMid meet",
+						role: "img",
+						"aria-label": "MEL x RRI time series",
+						onMouseMove: handleMouseMove,
+						onMouseLeave: onLeave,
+						children: [
+							// Y 轴网格
+							chart.yGrid.map(function (g) {
+								return (0, react_jsx_runtime.jsxs)(react.Fragment, { children: [
+									(0, react_jsx_runtime.jsx)("line", { x1: CHART_PAD.left, x2: chart.width - CHART_PAD.right, y1: g.y, y2: g.y, stroke: GRID_COLOR, strokeWidth: "0.5" }),
+									(0, react_jsx_runtime.jsx)("text", { x: CHART_PAD.left - 4, y: Number(g.y) + 3, fill: TICK_COLOR, fontSize: "8", textAnchor: "end", fontVariantNumeric: "tabular-nums", children: g.label }),
+								] }, "y" + g.value);
+							}),
+							// Gap area fill
+							chart.gap ? (0, react_jsx_runtime.jsx)("path", { d: chart.gap.path, fill: GAP_FILL, fillOpacity: 0.06, stroke: "none" }) : null,
+							// Lines
+							chart.mel ? (0, react_jsx_runtime.jsx)("path", { d: chart.mel.path, fill: "none", stroke: chart.mel.color, strokeWidth: "1.5", strokeLinejoin: "round", strokeLinecap: "round" }) : null,
+							chart.rri ? (0, react_jsx_runtime.jsx)("path", { d: chart.rri.path, fill: "none", stroke: chart.rri.color, strokeWidth: "1.5", strokeLinejoin: "round", strokeLinecap: "round" }) : null,
+							// X 轴刻度
+							chart.xTicks.map(function (tick) {
+								return (0, react_jsx_runtime.jsxs)(react.Fragment, { children: [
+									(0, react_jsx_runtime.jsx)("line", { x1: tick.x, x2: tick.x, y1: CHART_PAD.top, y2: chart.height - CHART_PAD.bottom, stroke: GRID_COLOR, strokeWidth: "0.5" }),
+									(0, react_jsx_runtime.jsx)("text", { x: tick.x, y: chart.height - 8, fill: TICK_COLOR, fontSize: "8", textAnchor: "middle", fontVariantNumeric: "tabular-nums", children: tick.label }),
+								] }, "x" + tick.x);
+							}),
+							// Current value endpoints
+							chart.current.map(function (dot) {
+								return (0, react_jsx_runtime.jsxs)(react.Fragment, { children: [
+									(0, react_jsx_runtime.jsx)("circle", { cx: dot.x.toFixed(1), cy: dot.y.toFixed(1), r: "4", fill: "var(--dsw-alias-bg-base, #111)", stroke: dot.color, strokeWidth: "1.5" }),
+									(0, react_jsx_runtime.jsx)("circle", { cx: dot.x.toFixed(1), cy: dot.y.toFixed(1), r: "2", fill: dot.color }),
+								] }, "ep-" + dot.label);
+							}),
+							// Crosshair
+							hoverIndex != null && chart.hoverData && chart.hoverData[hoverIndex] ? (0, react_jsx_runtime.jsx)("line", {
+								x1: chart.hoverData[hoverIndex].x,
+								x2: chart.hoverData[hoverIndex].x,
+								y1: CHART_PAD.top,
+								y2: chart.height - CHART_PAD.bottom,
+								stroke: CROSSHAIR_COLOR,
+								strokeWidth: "0.5",
+								strokeDasharray: "3 2",
+								pointerEvents: "none",
+							}) : null,
+							// Hover dots
+							hoverIndex != null && chart.hoverData && chart.hoverData[hoverIndex] ? (0, react_jsx_runtime.jsxs)(react.Fragment, { children: [
+								chart.hoverData[hoverIndex].melY != null ? (0, react_jsx_runtime.jsx)("circle", { cx: chart.hoverData[hoverIndex].x, cy: chart.hoverData[hoverIndex].melY, r: "3", fill: MEL_COLOR, stroke: "var(--dsw-alias-bg-base, #111)", strokeWidth: "1", pointerEvents: "none" }) : null,
+								chart.hoverData[hoverIndex].rriY != null ? (0, react_jsx_runtime.jsx)("circle", { cx: chart.hoverData[hoverIndex].x, cy: chart.hoverData[hoverIndex].rriY, r: "3", fill: RRI_COLOR, stroke: "var(--dsw-alias-bg-base, #111)", strokeWidth: "1", pointerEvents: "none" }) : null,
+							] }) : null,
+						],
 					});
 				}
 
-				if (loading && !dashboard) {
-					return (0, react_jsx_runtime.jsx)("div", { style: S.loadingWrap, children: "Loading…" });
-				}
-
-				if (error && !dashboard) {
-					return (0, react_jsx_runtime.jsxs)("div", { style: S.emptyWrap, children: [
-						(0, react_jsx_runtime.jsx)("div", { style: S.emptyIcon, children: "⚠" }),
-						(0, react_jsx_runtime.jsx)("p", { style: S.emptyTitle, children: "Load failed" }),
-						(0, react_jsx_runtime.jsx)("p", { style: S.emptyHint, children: error }),
-					] });
-				}
-
-				if (!dashboard || dashboard.totals.count === 0) {
-					return (0, react_jsx_runtime.jsxs)("div", { style: S.emptyWrap, children: [
-						(0, react_jsx_runtime.jsx)("div", { style: S.emptyIcon, children: "◎" }),
-						(0, react_jsx_runtime.jsx)("p", { style: S.emptyTitle, children: "Nothing recorded yet." }),
-						(0, react_jsx_runtime.jsx)("p", { style: S.emptyHint, children: "Start with one event." }),
-						typeof face?.setDraft === "function" ? (0, react_jsx_runtime.jsx)("button", {
-							type: "button",
-							style: S.emptyHint,
-							onClick: () => face.setDraft("记录一下："),
-							children: "＋ Record",
-						}) : null,
-					] });
-				}
-
-				const chart = buildChartPaths(dashboard.series, 300, 120);
-				return (0, react_jsx_runtime.jsxs)(react.Fragment, { children: [
-					(0, react_jsx_runtime.jsxs)("div", { style: S.header, children: [
-						(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" }, children: [
-							(0, react_jsx_runtime.jsx)("h3", { style: S.headerTitle, children: "Introspect" }),
-							(0, react_jsx_runtime.jsx)("button", { type: "button", style: S.refreshBtn, onClick: refresh, children: loading ? "…" : "↻" }),
-						] }),
-						(0, react_jsx_runtime.jsx)(MetricsGrid, { today: dashboard.today, window: dashboard.window }),
-						dashboard.today.gap !== null ? (0, react_jsx_runtime.jsxs)("div", { style: S.gapRow, children: [
-							(0, react_jsx_runtime.jsx)("span", { children: "Energy − Reality (raw)" }),
-							(0, react_jsx_runtime.jsx)("span", { style: { fontWeight: 600 }, children: signed(dashboard.today.gap) }),
-						] }) : null,
-					] }),
-					dashboard.series.length > 0 ? (0, react_jsx_runtime.jsxs)("div", { style: S.chartWrap, children: [
-						(0, react_jsx_runtime.jsxs)("div", { style: S.chartHeader, children: [
-							(0, react_jsx_runtime.jsx)("span", { children: `Last ${dashboard.hours}h` }),
-							(0, react_jsx_runtime.jsx)("div", { style: S.chartLegend, children: chart.legend.map((item) =>
-								(0, react_jsx_runtime.jsxs)("span", { style: S.legendItem, children: [
-									(0, react_jsx_runtime.jsx)("span", { style: { ...S.legendDot, background: item.color } }),
-									(0, react_jsx_runtime.jsxs)("span", { style: S.legendLabel, children: [item.label, " ", item.value ?? "-"] }),
-								] }, item.label)
-							) }),
-						] }),
-						(0, react_jsx_runtime.jsx)(MelRriChart, { chart: chart }),
-					] }) : null,
-					dashboard.recent.length > 0 ? (0, react_jsx_runtime.jsxs)("div", { style: S.recentWrap, children: [
-						(0, react_jsx_runtime.jsx)("div", { style: S.recentHeader, children: "Recent" }),
-						dashboard.recent.map((event) =>
-							(0, react_jsx_runtime.jsxs)("div", {
-								style: hovered === event.id ? { ...S.recentItem, ...S.recentItemHover } : S.recentItem,
-								onMouseEnter: () => setHovered(event.id),
-								onMouseLeave: () => setHovered(null),
-								onClick: () => openDetail(event.id),
-								children: [
-									(0, react_jsx_runtime.jsxs)("div", { style: S.recentTop, children: [
-										(0, react_jsx_runtime.jsx)("span", { style: S.recentSummary, children: event.summary }),
-										(0, react_jsx_runtime.jsx)("span", { style: S.recentTime, children: event.clock || event.stamp }),
-									] }),
-									(0, react_jsx_runtime.jsxs)("div", { style: S.recentMetrics, children: [
-										event.mel != null ? (0, react_jsx_runtime.jsx)("span", { style: S.recentMetricChip, children: `MEL ${event.mel}` }) : null,
-										event.rri != null ? (0, react_jsx_runtime.jsx)("span", { style: S.recentMetricChip, children: `RRI ${event.rri}` }) : null,
-										event.tsaMinutes != null ? (0, react_jsx_runtime.jsx)("span", { style: S.recentMetricChip, children: formatMinutes(event.tsaMinutes) }) : null,
-									] }),
-								],
-							}, event.id)
-						),
-					] }) : null,
-					(0, react_jsx_runtime.jsx)("div", { style: S.footer, children: (0, react_jsx_runtime.jsx)("span", { children: "Local SQLite · No upload" }) }),
-				] });
-			}
-
-			/** 五指标网格：latest + band + trend/avg 子行。 */
-			function MetricsGrid(props) {
-				const { today } = props;
-				const cells = [
-					{ label: "MEL", value: today.mel, sub: today.melDirection !== "flat" ? `${today.melDirection === "up" ? "↗" : today.melDirection === "down" ? "↘" : "→"} ${today.melDirection}` : "→ flat" },
-					{ label: "RRI", value: today.rri, sub: today.rriAvg != null ? `avg ${today.rriAvg}` : null },
-					{ label: "ROI", value: today.roi, sub: "today" },
-					{ label: "ARCTIC", value: today.arctic, sub: "Σ" },
-					{ label: "TSA", value: today.tsaText, sub: `${today.count} events` },
-				];
-				return (0, react_jsx_runtime.jsx)("div", { style: S.metricsGrid, children: cells.map((cell) =>
-					(0, react_jsx_runtime.jsxs)("div", { style: S.metricCell, children: [
-						(0, react_jsx_runtime.jsx)("span", { style: S.metricLabel, children: cell.label }),
-						(0, react_jsx_runtime.jsx)("span", { style: S.metricValue, children: cell.value ?? "-" }),
-						cell.sub ? (0, react_jsx_runtime.jsx)("span", { style: S.metricSub, children: cell.sub }) : null,
-					] }, cell.label)
-				) });
-			}
-
-			/** MEL × RRI SVG 图表：buildChartPaths 的纯渲染。 */
-			function MelRriChart(props) {
-				const { chart } = props;
-				if (!chart || chart.empty) return null;
-				return (0, react_jsx_runtime.jsxs)("svg", {
-					style: S.chartSvg,
-					viewBox: chart.viewBox,
-					preserveAspectRatio: "none",
-					role: "img",
-					"aria-label": "MEL x RRI time series",
-					children: [
-						chart.gap ? (0, react_jsx_runtime.jsx)("path", { d: chart.gap.path, fill: GAP_COLOR, fillOpacity: 0.08, stroke: "none" }) : null,
-						chart.mel ? (0, react_jsx_runtime.jsx)("path", { d: chart.mel.path, fill: "none", stroke: chart.mel.color, strokeWidth: "1.6", strokeLinejoin: "round" }) : null,
-						chart.rri ? (0, react_jsx_runtime.jsx)("path", { d: chart.rri.path, fill: "none", stroke: chart.rri.color, strokeWidth: "1.6", strokeLinejoin: "round" }) : null,
-						chart.current.map((dot) =>
-							(0, react_jsx_runtime.jsx)("circle", {
-								cx: dot.x.toFixed(1),
-								cy: dot.y.toFixed(1),
-								r: "3",
-								fill: dot.color,
-								stroke: "var(--dsw-alias-bg-base, #fff)",
-								strokeWidth: "1.2",
-							}, dot.label)
-						),
-						chart.ticks.map((tick) =>
-							(0, react_jsx_runtime.jsxs)(react.Fragment, { children: [
-								(0, react_jsx_runtime.jsx)("line", { x1: tick.x, x2: tick.x, y1: CHART_PAD.top, y2: chart.height - CHART_PAD.bottom, stroke: "var(--dsw-alias-border-l2, #e5e7eb)", strokeWidth: "0.5", strokeDasharray: "2 2" }),
-								(0, react_jsx_runtime.jsx)("text", { x: tick.x, y: chart.height - 4, fill: TICK_COLOR, fontSize: "9", textAnchor: "middle", fontVariantNumeric: "tabular-nums", children: tick.label }),
-							] }, tick.x)
-						),
-					],
-				});
-			}
-
-			/** 事件详情面板（点 recent 后展开）。 */
-			function DetailPanel(props) {
-				const { detail, loading, onBack, variant } = props;
-				const S_ = variant === "sidebar" ? S : S;
-				if (loading) {
-					return (0, react_jsx_runtime.jsxs)("div", { style: S_.detailWrap, children: [
-						(0, react_jsx_runtime.jsx)("button", { type: "button", style: S_.detailBack, onClick: onBack, children: "← Back" }),
-						(0, react_jsx_runtime.jsx)("div", { style: S.loadingWrap, children: "Loading…" }),
-					] });
-				}
-				if (!detail || !detail.event) {
-					return (0, react_jsx_runtime.jsxs)("div", { style: S_.detailWrap, children: [
-						(0, react_jsx_runtime.jsx)("button", { type: "button", style: S_.detailBack, onClick: onBack, children: "← Back" }),
-						(0, react_jsx_runtime.jsx)("div", { style: S.emptyHint, children: "Event not found." }),
-					] });
-				}
-				const event = detail.event;
-				const rows = [
-					{ label: "MEL", value: event.mel, reason: event.melReason },
-					{ label: "RRI", value: event.rri, reason: event.rriReason },
-					{ label: "ROI", value: event.roi != null ? signed(event.roi, 1) : null, reason: event.roiReason },
-					{ label: "ARCTIC", value: event.arctic != null ? signed(event.arctic) : null, reason: event.arcticReason },
-					{ label: "TSA", value: event.tsaMinutes != null ? formatMinutes(event.tsaMinutes) : null, reason: null },
-				];
-				return (0, react_jsx_runtime.jsxs)("div", { style: S_.detailWrap, children: [
-					(0, react_jsx_runtime.jsx)("button", { type: "button", style: S_.detailBack, onClick: onBack, children: "← Back" }),
-					(0, react_jsx_runtime.jsx)("p", { style: S_.detailSummary, children: event.summary }),
-					event.rawText ? (0, react_jsx_runtime.jsx)("pre", { style: S_.detailRaw, children: event.rawText }) : null,
-					(0, react_jsx_runtime.jsxs)("div", { style: { display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }, children: [
-						rows.map((row) =>
-							(0, react_jsx_runtime.jsxs)("div", { children: [
-								(0, react_jsx_runtime.jsxs)("div", { style: S_.detailRow, children: [
-									(0, react_jsx_runtime.jsx)("span", { style: S_.detailLabel, children: row.label }),
-									(0, react_jsx_runtime.jsx)("span", { style: S_.detailValue, children: row.value ?? "-" }),
+				/** Chart tooltip（hover 时显示的浮层）。 */
+				function ChartTooltip(props) {
+					var hover = props.hover;
+					var containerRef = props.containerRef;
+					if (!hover || !hover.data) return null;
+					var d = hover.data;
+					var containerRect = containerRef.current ? containerRef.current.getBoundingClientRect() : null;
+					var left = containerRect ? hover.mouseX - containerRect.left + 12 : 0;
+					var top = containerRect ? hover.mouseY - containerRect.top - 10 : 0;
+					// 边界修正
+					if (containerRect && left > containerRect.width - 140) left = left - 152;
+					if (top < 0) top = 8;
+					return (0, react_jsx_runtime.jsxs)("div", {
+						style: { ...S.tooltip, left: left + "px", top: top + "px" },
+						children: [
+							(0, react_jsx_runtime.jsx)("div", { style: S.tooltipTime, children: d.time ? localClock(d.time) : "" }),
+							d.mel != null ? (0, react_jsx_runtime.jsxs)("div", { style: S.tooltipRow, children: [
+								(0, react_jsx_runtime.jsx)("span", { style: S.tooltipLabel, children: "MEL" }),
+								(0, react_jsx_runtime.jsxs)("span", { style: S.tooltipVal, children: [d.mel, " → ", d.normalizedMel] }),
+							] }) : null,
+							d.rri != null ? (0, react_jsx_runtime.jsxs)("div", { style: S.tooltipRow, children: [
+								(0, react_jsx_runtime.jsx)("span", { style: S.tooltipLabel, children: "RRI" }),
+								(0, react_jsx_runtime.jsx)("span", { style: S.tooltipVal, children: d.rri }),
+							] }) : null,
+							d.gap !== null ? (0, react_jsx_runtime.jsxs)("div", { children: [
+								(0, react_jsx_runtime.jsx)("div", { style: S.tooltipDivider }),
+								(0, react_jsx_runtime.jsxs)("div", { style: S.tooltipRow, children: [
+									(0, react_jsx_runtime.jsx)("span", { style: S.tooltipLabel, children: "Gap" }),
+									(0, react_jsx_runtime.jsx)("span", { style: S.tooltipVal, children: signed(d.gap) }),
 								] }),
-								row.reason ? (0, react_jsx_runtime.jsx)("p", { style: S_.detailReason, children: row.reason }) : null,
-							] }, row.label)
-						),
-					] }),
-					event.gap !== null && event.gap !== undefined ? (0, react_jsx_runtime.jsxs)("div", { style: { ...S_.detailRow, marginTop: "2px" }, children: [
-						(0, react_jsx_runtime.jsx)("span", { style: S_.detailLabel, children: "Gap" }),
-						(0, react_jsx_runtime.jsx)("span", { style: S_.detailValue, children: signed(event.gap) }),
-					] }) : null,
-					Array.isArray(event.tags) && event.tags.length > 0 ? (0, react_jsx_runtime.jsx)("div", { style: S_.detailTags, children: event.tags.map((tag) => (0, react_jsx_runtime.jsx)("span", { style: S_.detailTag, children: tag }, tag)) }) : null,
-					event.eventTime ? (0, react_jsx_runtime.jsx)("p", { style: { fontSize: "10px", color: "var(--dsw-alias-label-caption)", margin: "4px 0 0" }, children: event.eventTime }) : null,
-				] });
-			}
-			//#endregion
+							] }) : null,
+						],
+					});
+				}
+
+				/** 事件详情面板。 */
+				function DetailPanel(props) {
+					var detail = props.detail;
+					var loading = props.loading;
+					var onBack = props.onBack;
+					if (loading) {
+						return (0, react_jsx_runtime.jsxs)("div", { style: S.detailWrap, children: [
+							(0, react_jsx_runtime.jsx)("button", { type: "button", style: S.detailBack, onClick: onBack, children: "← Back" }),
+							(0, react_jsx_runtime.jsx)("div", { style: S.loadingWrap, children: "Loading…" }),
+						] });
+					}
+					if (!detail || !detail.event) {
+						return (0, react_jsx_runtime.jsxs)("div", { style: S.detailWrap, children: [
+							(0, react_jsx_runtime.jsx)("button", { type: "button", style: S.detailBack, onClick: onBack, children: "← Back" }),
+							(0, react_jsx_runtime.jsx)("div", { style: S.emptyHint, children: "Event not found." }),
+						] });
+					}
+					var event = detail.event;
+					var rows = [
+						{ label: "MEL", value: event.mel, reason: event.melReason },
+						{ label: "RRI", value: event.rri, reason: event.rriReason },
+						{ label: "ROI", value: event.roi != null ? signed(event.roi, 1) : null, reason: event.roiReason },
+						{ label: "ARCTIC", value: event.arctic != null ? signed(event.arctic) : null, reason: event.arcticReason },
+						{ label: "TSA", value: event.tsaMinutes != null ? formatMinutes(event.tsaMinutes) : null, reason: null },
+					];
+					var ng = normalizedGap(event.mel, event.rri);
+					return (0, react_jsx_runtime.jsxs)("div", { style: S.detailWrap, children: [
+						(0, react_jsx_runtime.jsx)("button", { type: "button", style: S.detailBack, onClick: onBack, children: "← Back" }),
+						(0, react_jsx_runtime.jsx)("p", { style: S.detailSummary, children: event.summary }),
+						event.rawText ? (0, react_jsx_runtime.jsx)("pre", { style: S.detailRaw, children: event.rawText }) : null,
+						(0, react_jsx_runtime.jsx)("div", { style: { display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px" }, children: rows.map(function (row) {
+							return (0, react_jsx_runtime.jsxs)("div", { children: [
+								(0, react_jsx_runtime.jsxs)("div", { style: S.detailRow, children: [
+									(0, react_jsx_runtime.jsx)("span", { style: S.detailLabel, children: row.label }),
+									(0, react_jsx_runtime.jsx)("span", { style: S.detailValue, children: row.value ?? "—" }),
+								] }),
+								row.reason ? (0, react_jsx_runtime.jsx)("p", { style: S.detailReason, children: row.reason }) : null,
+							] }, row.label);
+						}) }),
+						ng !== null ? (0, react_jsx_runtime.jsxs)("div", { style: { ...S.detailRow, marginTop: "4px" }, children: [
+							(0, react_jsx_runtime.jsx)("span", { style: S.detailLabel, children: "GAP" }),
+							(0, react_jsx_runtime.jsx)("span", { style: S.detailValue, children: signed(ng) }),
+						] }) : null,
+						Array.isArray(event.tags) && event.tags.length > 0 ? (0, react_jsx_runtime.jsx)("div", { style: S.detailTags, children: event.tags.map(function (tag) { return (0, react_jsx_runtime.jsx)("span", { style: S.detailTag, children: tag }, tag); }) }) : null,
+						event.eventTime ? (0, react_jsx_runtime.jsx)("p", { style: { fontSize: "10px", color: "var(--dsw-alias-label-caption)", margin: "8px 0 0", fontVariantNumeric: "tabular-nums" }, children: event.eventTime }) : null,
+					] });
+				}
+				//#endregion
 
 			/**
 			 * openMindmapTab → openIntrospectTab：向 Better Sidebar 发出按需展开 Tab 的请求，
@@ -956,27 +1353,31 @@ window.__ModuleLoader__.load({
 			}
 
 			exports.apply = apply;
-			exports.inject = inject;
-			exports.internals = Object.freeze({
-				conversationNodesOf,
-				introspectFingerprint,
-				latestRecordedId,
-				normalizeTo100,
-				formatMinutes,
-				signed,
-				trimForList,
-				resultTextOfBlocks,
-				buildChartPaths,
-				linePath: typeof polylinePath === "function" ? polylinePath : null,
-				chartGeometry: typeof buildChartPaths === "function" ? buildChartPaths : null,
-				localClock,
-				sidebarBus,
-				sessionStore,
-				IntrospectSlot,
-				IntrospectWorkspace,
-				S,
-				INTROSPECT_TOOLS,
-			});
+				exports.inject = inject;
+				exports.internals = Object.freeze({
+					conversationNodesOf,
+					introspectFingerprint,
+					latestRecordedId,
+					normalizeTo100,
+					formatMinutes,
+					signed,
+					trimForList,
+					normalizedGap,
+					gapDirectionText,
+					melBand,
+					rriBand,
+					resultTextOfBlocks,
+					buildChartPaths,
+					linePath: typeof polylinePath === "function" ? polylinePath : null,
+					chartGeometry: typeof buildChartPaths === "function" ? buildChartPaths : null,
+					localClock,
+					sidebarBus,
+					sessionStore,
+					IntrospectSlot,
+					IntrospectWorkspace,
+					S,
+					INTROSPECT_TOOLS,
+				});
 			// close.js：ModuleLoader 工厂函数闭合花括号。
 			// 同一逻辑块的物理拆分，拼接时不额外插空行（见 build-client.mjs）。
 			// 这个文件是 apply.js 函数体的直接续写。
